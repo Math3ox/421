@@ -60,7 +60,7 @@ t_bot_first: .asciz "Le bot commence..."
 t_rolling:   .asciz "Les d\351s roulent..."
 t_ch1:       .asciz "Lancer "
 t_slash:     .asciz "/"
-t_ch2:       .asciz " : clique sur les d\351s \340 relancer, puis RELANCER (ou VALIDER pour garder)."
+t_ch2:       .asciz " : choisis les d\351s \340 relancer, puis RELANCER (ou VALIDER)."
 t_nosel:     .asciz "Clique d'abord sur les d\351s \340 relancer, ou VALIDER pour garder ta main."
 t_toi:       .asciz "Toi : "
 t_bot:       .asciz "Bot : "
@@ -106,7 +106,7 @@ g_ptokw:    .skip 4
 g_btokw:    .skip 4
 g_pcat:     .skip 4
 g_bcat:     .skip 4
-g_pt1:      .skip 8
+g_pt1:      .skip 528
 .balign 8
 g_wp:       .skip 8
 g_line1:    .skip 192
@@ -303,6 +303,7 @@ refresh_dice:
     inc r12d
     cmp r12d, 6
     jb .Lrd
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
@@ -348,6 +349,7 @@ begin_round:
     mov edx, ACT_BOT_ROLL
     call set_wake
 .Lbr_end:
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
@@ -393,6 +395,7 @@ player_press_main:
     call msg_start
     lea rsi, [rip+t_nosel]
     call msg_str
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     jmp .Lpm_end
 2:  call clear_held
@@ -500,6 +503,7 @@ finish_player_turn:
     mov edx, ACT_RESOLVE
     call set_wake
 .Lfp_end:
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
@@ -555,7 +559,17 @@ bot_after_roll:
     jb .Lbo_d
     test ebx, ebx
     jz .Lbo_stop
-    popcnt r13d, ebx
+    mov eax, ebx
+    xor r13d, r13d
+.Lbo_pc:
+    test eax, eax
+    jz .Lbo_pcend
+    mov edx, eax
+    dec edx
+    and eax, edx
+    inc r13d
+    jmp .Lbo_pc
+.Lbo_pcend:
     shl ebx, 3
     mov dword ptr [rip+g_botmask], ebx
     lea rdi, [rip+g_line1]
@@ -575,6 +589,7 @@ bot_after_roll:
     mov edx, ACT_BOT_DONE
     call set_wake
 .Lbo_end:
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
@@ -619,6 +634,7 @@ do_action:
     call msg_num
     lea rsi, [rip+t_bst3]
     call msg_str
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     jmp .Lda_end
 .Lda_res:
@@ -712,6 +728,7 @@ resolve_round:
     call msg_str
     mov dword ptr [rip+g_phase], PH_OVER
 .Lrr_end:
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
@@ -746,11 +763,11 @@ hit_button:
 # on_click : ecx = x, edx = y (coordonnées du tampon)
 on_click:
     ENTER
-    inc dword ptr [rip+g_clicks]
     mov r12d, ecx
     mov r13d, edx
-    mov dword ptr [rip+g_dist+8], ecx
-    mov dword ptr [rip+g_dist+12], edx
+    inc dword ptr [rip+g_clicks]
+    mov ecx, 1                      # les clics sont en pixels de la fenêtre (échelle 1x)
+    call set_target
     mov eax, dword ptr [rip+g_phase]
     cmp eax, PH_ROLLING
     je .Loc_end
@@ -791,15 +808,13 @@ on_click:
     sub ecx, r13d
     imul ecx, ecx
     add eax, ecx
-    lea rdx, [rip+g_dist]
-    mov dword ptr [rdx+r14*4], eax
-    cmp eax, 15625
+    cmp eax, 3900
     ja 3f
     xor dword ptr [rbx+D_HELD], 1
-    inc dword ptr [rip+g_tog]
     mov rdi, rbx
     movsd xmm0, qword ptr [rip+k_one]
     call update_die
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     jmp .Loc_end
 3:  inc r14d
@@ -840,8 +855,9 @@ draw_button:
     movsd xmm3, qword ptr [rip+k_btnr]
     movsd xmm4, qword ptr [rip+k_btnh]
     call draw_cylinder
-    mov rcx, qword ptr [rip+g_fontB]
-    call sel_font
+    call sync_prims
+    mov ecx, 3
+    call sel_fontk
     mov ecx, r13d
     call set_txt
     movsd xmm0, qword ptr [rip+k_btntz]
@@ -851,6 +867,7 @@ draw_button:
     subsd xmm1, qword ptr [rip+k_btnoff]
     mov rsi, r12
     call draw_ground_text
+    call sync_prims
     movsd xmm0, qword ptr [rip+k_felt]
     movsd qword ptr [rip+g_gtz], xmm0
     LEAVE
@@ -890,132 +907,18 @@ draw_buttons:
     call draw_button
     LEAVE
 
-# draw_hud : titre, numéro de manche, messages
-draw_hud:
-    ENTER
-    mov rcx, qword ptr [rip+g_fontH]
-    call sel_font
-    mov ecx, C_GOLD
-    call set_txt
-    mov ecx, 40
-    mov edx, 6
-    lea r8, [rip+s_h1]
-    xor r9d, r9d
-    call draw_flat
-    mov rcx, qword ptr [rip+g_fontM]
-    call sel_font
-    mov ecx, C_WHITE
-    call set_txt
-    lea rdi, [rip+g_lbl]
-    call msg_start
-    lea rsi, [rip+t_manche]
-    call msg_str
-    mov eax, dword ptr [rip+g_round]
-    call msg_num
-    mov ecx, BUFW-40
-    mov edx, 34
-    lea r8, [rip+g_lbl]
-    mov r9d, 2                      # TA_RIGHT
-    call draw_flat
-    mov ecx, 40
-    mov edx, 124
-    lea r8, [rip+g_line1]
-    xor r9d, r9d
-    call draw_flat
-    mov ecx, C_GOLD
-    call set_txt
-    mov ecx, 40
-    mov edx, 196
-    lea r8, [rip+g_line2]
-    xor r9d, r9d
-    call draw_flat
-    LEAVE
 
-# render_frame : dessine toute la scène puis réduit le tampon vers la fenêtre
-render_frame:
-    ENTER
-    mov ecx, C_BG
-    call set_brush
-    call pen_off
-    mov rcx, qword ptr [rip+g_hdc]
-    xor edx, edx
-    xor r8d, r8d
-    mov r9d, BUFW
-    mov dword ptr [rsp+32], BUFH
-    mov dword ptr [rsp+40], 0x00F00021      # PATCOPY
-    call PatBlt
-    call draw_table
-    # étiquettes sur le tapis, avec les nombres de jetons
-    mov rcx, qword ptr [rip+g_fontG]
-    call sel_font
-    mov ecx, C_TXTGND
-    call set_txt
-    lea rdi, [rip+g_lbl]
-    call msg_start
-    lea rsi, [rip+l_pot]
-    call msg_str
-    mov eax, dword ptr [rip+g_pot]
-    call msg_num
-    lea rsi, [rip+g_lbl]
-    movsd xmm0, qword ptr [rip+k_pota]
-    movsd xmm1, qword ptr [rip+k_potlz]
-    call draw_ground_text
-    lea rdi, [rip+g_lbl]
-    call msg_start
-    lea rsi, [rip+l_toi]
-    call msg_str
-    mov eax, dword ptr [rip+g_ptok]
-    call msg_num
-    lea rsi, [rip+g_lbl]
-    xorpd xmm0, xmm0
-    movsd xmm1, qword ptr [rip+k_toilz]
-    call draw_ground_text
-    lea rdi, [rip+g_lbl]
-    call msg_start
-    lea rsi, [rip+l_bot]
-    call msg_str
-    mov eax, dword ptr [rip+g_btok]
-    call msg_num
-    lea rsi, [rip+g_lbl]
-    xorpd xmm0, xmm0
-    movsd xmm1, qword ptr [rip+k_botlz]
-    call draw_ground_text
-    # jetons (du plus loin au plus près), dés, boutons
-    mov dword ptr [rip+g_ctop], C_BOTTOP
-    mov dword ptr [rip+g_cside], C_BOTSIDE
-    xorpd xmm0, xmm0
-    movsd xmm1, qword ptr [rip+k_botz]
-    mov edi, dword ptr [rip+g_btok]
-    call draw_chips
-    mov dword ptr [rip+g_ctop], C_POTTOP
-    mov dword ptr [rip+g_cside], C_POTSIDE
-    movsd xmm0, qword ptr [rip+k_pota]
-    xorpd xmm1, xmm1
-    mov edi, dword ptr [rip+g_pot]
-    call draw_chips
-    call draw_buttons
-    call draw_dice_all
-    mov dword ptr [rip+g_ctop], C_PLTOP
-    mov dword ptr [rip+g_cside], C_PLSIDE
-    xorpd xmm0, xmm0
-    movsd xmm1, qword ptr [rip+k_plz]
-    mov edi, dword ptr [rip+g_ptok]
-    call draw_chips
-    call draw_hud
-    call GdiFlush
-    call downsample
-    mov dword ptr [rip+g_dirty], 0
-    LEAVE
-
+# ---------- contrôle : valeurs et mesures dans le titre de la fenêtre (touche D) ----------
+.section .rdata,"dr"
 t_sp:       .asciz " "
 .bss
-g_dbg:      .skip 96
+.balign 8
+g_dbg:      .skip 200
 g_clicks:   .skip 4
-g_tog:      .skip 4
-g_dist:     .skip 16
 .text
 
-# debug_title : écrit les valeurs des six dés et la phase dans le titre de la fenêtre
+# debug_title : 6 dés, phase, qui, lancers, limite, qui commence, dés choisis, clics,
+#               mode, durée de la dernière image (ticks QPC), durée du rendu du décor, images
 debug_title:
     ENTER
     lea rdi, [rip+g_dbg]
@@ -1031,26 +934,12 @@ debug_title:
     inc r12d
     cmp r12d, 6
     jb .Ldt
-    mov eax, dword ptr [rip+g_phase]
+    .irp v, g_phase, g_who, g_pthrows, g_lim, g_starter
+    mov eax, dword ptr [rip+\v]
     call msg_num
     lea rsi, [rip+t_sp]
     call msg_str
-    mov eax, dword ptr [rip+g_who]
-    call msg_num
-    lea rsi, [rip+t_sp]
-    call msg_str
-    mov eax, dword ptr [rip+g_pthrows]
-    call msg_num
-    lea rsi, [rip+t_sp]
-    call msg_str
-    mov eax, dword ptr [rip+g_lim]
-    call msg_num
-    lea rsi, [rip+t_sp]
-    call msg_str
-    mov eax, dword ptr [rip+g_starter]
-    call msg_num
-    lea rsi, [rip+t_sp]
-    call msg_str
+    .endr
     mov eax, dword ptr [rip+g_dice+D_HELD]
     add eax, eax
     add eax, dword ptr [rip+g_dice+DSTRIDE+D_HELD]
@@ -1063,23 +952,19 @@ debug_title:
     call msg_num
     lea rsi, [rip+t_sp]
     call msg_str
-    mov eax, dword ptr [rip+g_dist]
+    mov eax, dword ptr [rip+g_mode]
     call msg_num
     lea rsi, [rip+t_sp]
     call msg_str
-    mov eax, dword ptr [rip+g_dist+4]
+    mov eax, dword ptr [rip+g_tfr]
     call msg_num
     lea rsi, [rip+t_sp]
     call msg_str
-    mov eax, dword ptr [rip+g_dist+8]
+    mov eax, dword ptr [rip+g_tbg]
     call msg_num
     lea rsi, [rip+t_sp]
     call msg_str
-    mov eax, dword ptr [rip+g_dist+12]
-    call msg_num
-    lea rsi, [rip+t_sp]
-    call msg_str
-    mov eax, dword ptr [rip+g_pt1+4]
+    mov eax, dword ptr [rip+g_frames]
     call msg_num
     mov rcx, qword ptr [rip+g_hwnd]
     lea rdx, [rip+g_dbg]

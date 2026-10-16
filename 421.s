@@ -32,6 +32,15 @@
 .equ D_P,     240               # 3 dq : position monde du centre
 .equ D_DEPTH, 264               # dq profondeur (tri)
 
+.equ D_BBL, 272                     # boîte englobante précédente d'un dé (4 dd) + validité
+.equ D_BBT, 276
+.equ D_BBR, 280
+.equ D_BBB, 284
+.equ D_BBV, 288
+.equ PTSF_OFF, 512                  # décalage des coordonnées flottantes dans g_pts
+.equ RMAXW, 640                     # taille max d'un polygone rastérisé
+.equ RMAXH, 480
+
 .macro RGB name, r, g, b
 .equ \name, ((\b) << 16) | ((\g) << 8) | (\r)
 .endm
@@ -225,7 +234,7 @@ g_bw:       .skip 24
 g_P:        .skip 24
 g_tmp3:     .skip 24
 g_tmp:      .skip 8
-g_pts:      .skip 128
+g_pts:      .skip 1024
 g_order:    .skip 8
 cy_a:       .skip 8
 cy_b:       .skip 8
@@ -391,6 +400,10 @@ proj:
     addsd xmm3, qword ptr [rip+g_cx]
     movsd xmm2, qword ptr [rip+g_cy]
     subsd xmm2, xmm0
+    cvtsd2ss xmm0, xmm3
+    movss dword ptr [rdi+PTSF_OFF], xmm0
+    cvtsd2ss xmm1, xmm2
+    movss dword ptr [rdi+PTSF_OFF+4], xmm1
     cvtsd2si eax, xmm3
     mov dword ptr [rdi], eax
     cvtsd2si eax, xmm2
@@ -505,58 +518,6 @@ ground_ellipse:
     mov dword ptr [rsp+32], eax     # bas
     mov rcx, qword ptr [rip+g_hdc]
     call Ellipse
-    LEAVE
-
-# draw_cylinder : xmm0 = a, xmm1 = b, xmm2 = z0, xmm3 = rayon, xmm4 = hauteur
-#                 couleurs : g_ctop / g_cside
-draw_cylinder:
-    ENTER
-    movsd qword ptr [rip+cy_a], xmm0
-    movsd qword ptr [rip+cy_b], xmm1
-    movsd qword ptr [rip+cy_z0], xmm2
-    movsd qword ptr [rip+cy_rho], xmm3
-    movsd qword ptr [rip+cy_h], xmm4
-    mov ecx, dword ptr [rip+g_cside]
-    call set_brush
-    movsd xmm0, qword ptr [rip+cy_a]
-    movsd xmm1, qword ptr [rip+cy_b]
-    movsd xmm2, qword ptr [rip+cy_z0]
-    movsd xmm3, qword ptr [rip+cy_rho]
-    call ground_ellipse             # base
-    movsd xmm0, qword ptr [rip+cy_a]
-    subsd xmm0, qword ptr [rip+cy_rho]
-    movsd xmm1, qword ptr [rip+cy_b]
-    movsd xmm2, qword ptr [rip+cy_z0]
-    addsd xmm2, qword ptr [rip+cy_h]
-    call scr_ground                 # coin haut-gauche
-    cvtsd2si r12d, xmm0
-    cvtsd2si r13d, xmm1
-    movsd xmm0, qword ptr [rip+cy_a]
-    addsd xmm0, qword ptr [rip+cy_rho]
-    movsd xmm1, qword ptr [rip+cy_b]
-    movsd xmm2, qword ptr [rip+cy_z0]
-    call scr_ground                 # coin bas-droit
-    cvtsd2si r9d, xmm0
-    inc r9d
-    cvtsd2si eax, xmm1
-    inc eax
-    mov dword ptr [rsp+32], eax
-    mov rcx, qword ptr [rip+g_hdc]
-    mov edx, r12d
-    mov r8d, r13d
-    call Rectangle                  # flanc
-    mov ecx, dword ptr [rip+g_ctop]
-    call set_brush
-    mov ecx, dword ptr [rip+g_cside]
-    call set_pen
-    call pen_on
-    movsd xmm0, qword ptr [rip+cy_a]
-    movsd xmm1, qword ptr [rip+cy_b]
-    movsd xmm2, qword ptr [rip+cy_z0]
-    addsd xmm2, qword ptr [rip+cy_h]
-    movsd xmm3, qword ptr [rip+cy_rho]
-    call ground_ellipse             # dessus
-    call pen_off
     LEAVE
 
 # draw_chips : xmm0 = a, xmm1 = b, edi = nombre de jetons (piles de 6)
@@ -831,6 +792,7 @@ init_dice:
     movsd qword ptr [rbx+D_AXZ], xmm0
     mov dword ptr [rbx+D_HELD], 0
     mov dword ptr [rbx+D_ROLL], 0
+    mov dword ptr [rbx+D_BBV], 0
     mov rdi, rbx
     movsd xmm0, qword ptr [rip+k_one]
     call update_die
@@ -848,6 +810,7 @@ start_throw:
     imul eax, r13d, DSTRIDE
     lea rbx, [rip+g_dice]
     mov dword ptr [rbx+rax+D_ROLL], 0
+    mov dword ptr [rbx+rax+D_BBV], 0
     inc r13d
     cmp r13d, 6
     jb .Lst_clr
@@ -934,6 +897,7 @@ start_throw:
     call GetTickCount
     mov dword ptr [rip+g_tstart], eax
     mov dword ptr [rip+g_rolling], 1
+    mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
@@ -964,13 +928,21 @@ tick:
     jne 2f
     movsd xmm0, qword ptr [rip+k_one]
 2:  call update_die
-    inc r12d
+    imul eax, r12d, DSTRIDE
+    lea rdi, [rip+g_dice]
+    add rdi, rax
+    cmp dword ptr [rdi+D_ROLL], 0
+    je 3f
+    call die_bbox
+3:  inc r12d
     cmp r12d, 6
     jb .Ltk_die
     mov dword ptr [rip+g_dirty], 1
     test r15d, r15d
     jz .Ltk_wake
     call on_roll_done
+    mov dword ptr [rip+g_full], 1
+    mov dword ptr [rip+g_dirty], 1
 .Ltk_wake:
     cmp dword ptr [rip+g_wake], 0
     je .Ltk_done
@@ -980,6 +952,8 @@ tick:
     mov dword ptr [rip+g_wake], 0
     mov ecx, dword ptr [rip+g_wakeact]
     call do_action
+    mov dword ptr [rip+g_full], 1
+    mov dword ptr [rip+g_dirty], 1
 .Ltk_done:
     LEAVE
 
@@ -1016,265 +990,6 @@ calc_pt:
     movsd qword ptr [rip+g_tmp3+\o], xmm3
     .endr
     ret
-
-# draw_die_shadow : rdi = dé (ombre portée seulement)
-draw_die_shadow:
-    ENTER
-    mov rbx, rdi
-    mov rax, qword ptr [rbx+D_P]
-    mov qword ptr [rip+g_P], rax
-    mov rax, qword ptr [rbx+D_P+8]
-    mov qword ptr [rip+g_P+8], rax
-    mov rax, qword ptr [rbx+D_P+16]
-    mov qword ptr [rip+g_P+16], rax
-    # --- ombre portée ---
-    mov ecx, C_SHADOW
-    call set_brush
-    xor r12d, r12d
-.Lsh_face:
-    call calc_face
-    xor r13d, r13d
-.Lsh_corner:
-    lea rax, [rip+k_corner]
-    mov ecx, r13d
-    shl ecx, 4
-    movsd xmm1, qword ptr [rax+rcx]
-    movsd xmm2, qword ptr [rax+rcx+8]
-    movsd xmm0, qword ptr [rip+k_one]
-    call calc_pt
-    movsd xmm0, qword ptr [rip+g_tmp3+16]
-    movapd xmm1, xmm0
-    mulsd xmm0, qword ptr [rip+k_shx]
-    addsd xmm0, qword ptr [rip+g_tmp3]
-    movsd qword ptr [rip+g_tmp3], xmm0
-    mulsd xmm1, qword ptr [rip+k_shy]
-    addsd xmm1, qword ptr [rip+g_tmp3+8]
-    movsd qword ptr [rip+g_tmp3+8], xmm1
-    xorpd xmm2, xmm2
-    movsd qword ptr [rip+g_tmp3+16], xmm2
-    lea rdi, [rip+g_pts]
-    mov eax, r13d
-    lea rdi, [rdi+rax*8]
-    lea rsi, [rip+g_tmp3]
-    call proj
-    inc r13d
-    cmp r13d, 4
-    jb .Lsh_corner
-    mov rcx, qword ptr [rip+g_hdc]
-    lea rdx, [rip+g_pts]
-    mov r8d, 4
-    call Polygon
-    inc r12d
-    cmp r12d, 6
-    jb .Lsh_face
-    LEAVE
-
-# draw_die : rdi = dé (corps : faces visibles et points)
-draw_die:
-    ENTER
-    mov rbx, rdi
-    mov rax, qword ptr [rbx+D_P]
-    mov qword ptr [rip+g_P], rax
-    mov rax, qword ptr [rbx+D_P+8]
-    mov qword ptr [rip+g_P+8], rax
-    mov rax, qword ptr [rbx+D_P+16]
-    mov qword ptr [rip+g_P+16], rax
-    # --- faces visibles ---
-    xor r12d, r12d
-.Lface:
-    call calc_face
-    movsd xmm0, qword ptr [rip+g_nw]
-    addsd xmm0, qword ptr [rip+g_nw+8]
-    subsd xmm0, qword ptr [rip+g_nw+16]
-    xorpd xmm1, xmm1
-    comisd xmm0, xmm1
-    jae .Lface_next                 # face cachée
-    movsd xmm0, qword ptr [rip+g_nw]
-    mulsd xmm0, qword ptr [rip+k_lx]
-    movsd xmm1, qword ptr [rip+g_nw+8]
-    mulsd xmm1, qword ptr [rip+k_ly]
-    addsd xmm0, xmm1
-    movsd xmm1, qword ptr [rip+g_nw+16]
-    mulsd xmm1, qword ptr [rip+k_lz]
-    addsd xmm0, xmm1
-    xorpd xmm1, xmm1
-    maxsd xmm0, xmm1
-    mulsd xmm0, qword ptr [rip+k_lk]
-    addsd xmm0, qword ptr [rip+k_la]    # éclairement
-    movsd xmm1, qword ptr [rip+k_dr]
-    mulsd xmm1, xmm0
-    cvtsd2si eax, xmm1
-    movsd xmm1, qword ptr [rip+k_dg]
-    mulsd xmm1, xmm0
-    cvtsd2si ecx, xmm1
-    movsd xmm1, qword ptr [rip+k_db]
-    mulsd xmm1, xmm0
-    cvtsd2si edx, xmm1
-    shl edx, 16
-    shl ecx, 8
-    or eax, ecx
-    or eax, edx
-    mov ecx, eax
-    call set_brush
-    mov ecx, C_EDGE
-    cmp dword ptr [rbx+D_HELD], 0
-    je 7f
-    mov ecx, C_GOLD
-7:  call set_pen
-    xor r13d, r13d
-.Lf_corner:
-    lea rax, [rip+k_corner]
-    mov ecx, r13d
-    shl ecx, 4
-    movsd xmm1, qword ptr [rax+rcx]
-    movsd xmm2, qword ptr [rax+rcx+8]
-    movsd xmm0, qword ptr [rip+k_one]
-    call calc_pt
-    lea rdi, [rip+g_pts]
-    mov eax, r13d
-    lea rdi, [rdi+rax*8]
-    lea rsi, [rip+g_tmp3]
-    call proj
-    inc r13d
-    cmp r13d, 4
-    jb .Lf_corner
-    call pen_on
-    mov rcx, qword ptr [rip+g_hdc]
-    lea rdx, [rip+g_pts]
-    mov r8d, 4
-    call Polygon
-    call pen_off
-    # points
-    lea rax, [rip+k_pipmask]
-    movzx r13d, word ptr [rax+r12*2]
-    mov ecx, C_PIP
-    test r12d, r12d
-    jnz 1f
-    mov ecx, C_PIPRED
-1:  call set_brush
-    xor r14d, r14d
-.Lpip:
-    bt r13d, r14d
-    jnc .Lpip_next
-    xor r15d, r15d
-.Lring:
-    lea rax, [rip+k_ring]
-    mov ecx, r15d
-    shl ecx, 4
-    movsd xmm1, qword ptr [rax+rcx]
-    movsd xmm2, qword ptr [rax+rcx+8]
-    mulsd xmm1, qword ptr [rip+k_pr]
-    mulsd xmm2, qword ptr [rip+k_pr]
-    lea rax, [rip+k_pipx]
-    addsd xmm1, qword ptr [rax+r14*8]
-    lea rax, [rip+k_pipy]
-    addsd xmm2, qword ptr [rax+r14*8]
-    movsd xmm0, qword ptr [rip+k_pn]
-    call calc_pt
-    lea rdi, [rip+g_pts]
-    mov eax, r15d
-    lea rdi, [rdi+rax*8]
-    lea rsi, [rip+g_tmp3]
-    call proj
-    inc r15d
-    cmp r15d, 12
-    jb .Lring
-    mov rcx, qword ptr [rip+g_hdc]
-    lea rdx, [rip+g_pts]
-    mov r8d, 12
-    call Polygon
-.Lpip_next:
-    inc r14d
-    cmp r14d, 9
-    jb .Lpip
-.Lface_next:
-    inc r12d
-    cmp r12d, 6
-    jb .Lface
-    LEAVE
-
-# draw_dice_all : anneaux des dés gardés, puis les six dés du plus loin au plus proche
-draw_dice_all:
-    ENTER
-    xor r12d, r12d
-.Ldd_ring:
-    imul eax, r12d, DSTRIDE
-    lea rbx, [rip+g_dice]
-    add rbx, rax
-    cmp dword ptr [rbx+D_HELD], 0
-    je .Ldd_rnext
-    mov ecx, C_HELDDISC
-    call set_brush
-    movsd xmm0, qword ptr [rbx+D_AX]
-    movsd xmm1, qword ptr [rbx+D_BY]
-    movsd xmm2, qword ptr [rip+k_felt]
-    movsd xmm3, qword ptr [rip+k_heldr]
-    call ground_ellipse
-    call brush_off
-    mov ecx, C_GOLD
-    call set_pen
-    call pen_on
-    movsd xmm0, qword ptr [rbx+D_AX]
-    movsd xmm1, qword ptr [rbx+D_BY]
-    movsd xmm2, qword ptr [rip+k_felt]
-    movsd xmm3, qword ptr [rip+k_heldr]
-    call ground_ellipse
-    call pen_off
-    call brush_on
-.Ldd_rnext:
-    inc r12d
-    cmp r12d, 6
-    jb .Ldd_ring
-    xor ecx, ecx
-    lea rax, [rip+g_order]
-1:  mov byte ptr [rax+rcx], cl
-    inc ecx
-    cmp ecx, 6
-    jb 1b
-    mov r13d, 5
-.Ldd_pass:
-    xor r12d, r12d
-.Ldd_j:
-    lea r8, [rip+g_order]
-    movzx eax, byte ptr [r8+r12]
-    movzx ecx, byte ptr [r8+r12+1]
-    lea r9, [rip+g_dice]
-    imul edx, eax, DSTRIDE
-    movsd xmm0, qword ptr [r9+rdx+D_DEPTH]
-    imul edx, ecx, DSTRIDE
-    movsd xmm1, qword ptr [r9+rdx+D_DEPTH]
-    comisd xmm0, xmm1
-    jae 2f
-    mov byte ptr [r8+r12], cl
-    mov byte ptr [r8+r12+1], al
-2:  inc r12d
-    cmp r12d, 5
-    jb .Ldd_j
-    dec r13d
-    jnz .Ldd_pass
-    xor r12d, r12d
-.Ldd_sh:
-    lea rax, [rip+g_order]
-    movzx eax, byte ptr [rax+r12]
-    imul eax, eax, DSTRIDE
-    lea rdi, [rip+g_dice]
-    add rdi, rax
-    call draw_die_shadow
-    inc r12d
-    cmp r12d, 6
-    jb .Ldd_sh
-    xor r12d, r12d
-.Ldd:
-    lea rax, [rip+g_order]
-    movzx eax, byte ptr [rax+r12]
-    imul eax, eax, DSTRIDE
-    lea rdi, [rip+g_dice]
-    add rdi, rax
-    call draw_die
-    inc r12d
-    cmp r12d, 6
-    jb .Ldd
-    LEAVE
 
 # ---------- le plateau ----------
 
@@ -1386,39 +1101,6 @@ draw_table:
 
 # ---------- image complète ----------
 
-# downsample : tampon x2 -> fenêtre (moyenne 2x2 par pavgb)
-downsample:
-    mov rsi, qword ptr [rip+g_bigbits]
-    mov rdi, qword ptr [rip+g_smallbits]
-    mov r8d, WH
-.Lds_row:
-    lea rdx, [rsi+BUFW*4]
-    mov ecx, WW/4
-.Lds_blk:
-    movdqu xmm0, xmmword ptr [rsi]
-    movdqu xmm1, xmmword ptr [rdx]
-    pavgb xmm0, xmm1
-    movdqu xmm2, xmmword ptr [rsi+16]
-    movdqu xmm3, xmmword ptr [rdx+16]
-    pavgb xmm2, xmm3
-    pshufd xmm4, xmm0, 0x88
-    pshufd xmm0, xmm0, 0xDD
-    pavgb xmm0, xmm4
-    pshufd xmm4, xmm2, 0x88
-    pshufd xmm2, xmm2, 0xDD
-    pavgb xmm2, xmm4
-    punpcklqdq xmm0, xmm2
-    movdqu xmmword ptr [rdi], xmm0
-    add rsi, 32
-    add rdx, 32
-    add rdi, 16
-    dec ecx
-    jnz .Lds_blk
-    add rsi, BUFW*4
-    dec r8d
-    jnz .Lds_row
-    ret
-
 # save_bmp : écrit la fenêtre dans 421_shot.bmp
 save_bmp:
     ENTER
@@ -1448,143 +1130,6 @@ save_bmp:
     mov rcx, rbx
     call CloseHandle
 .Lsb_end:
-    LEAVE
-
-# ---------- initialisation graphique ----------
-init_gfx:
-    ENTER
-    mov rcx, qword ptr [rip+g_hwnd]
-    call GetDC
-    mov r12, rax
-    mov rcx, r12
-    call CreateCompatibleDC
-    mov qword ptr [rip+g_hdc], rax
-    mov rcx, r12
-    lea rdx, [rip+g_bmiBig]
-    xor r8d, r8d
-    lea r9, [rip+g_bigbits]
-    mov qword ptr [rsp+32], 0
-    mov dword ptr [rsp+40], 0
-    call CreateDIBSection
-    mov rcx, qword ptr [rip+g_hdc]
-    mov rdx, rax
-    call SelectObject
-    mov rcx, r12
-    call CreateCompatibleDC
-    mov qword ptr [rip+g_hdcSmall], rax
-    mov rcx, r12
-    lea rdx, [rip+g_bmiSmall]
-    xor r8d, r8d
-    lea r9, [rip+g_smallbits]
-    mov qword ptr [rsp+32], 0
-    mov dword ptr [rsp+40], 0
-    call CreateDIBSection
-    mov rcx, qword ptr [rip+g_hdcSmall]
-    mov rdx, rax
-    call SelectObject
-    mov rcx, qword ptr [rip+g_hwnd]
-    mov rdx, r12
-    call ReleaseDC
-    mov ecx, 18                     # DC_BRUSH
-    call GetStockObject
-    mov qword ptr [rip+g_dcbrush], rax
-    mov ecx, 19                     # DC_PEN
-    call GetStockObject
-    mov qword ptr [rip+g_dcpen], rax
-    mov ecx, 8                      # NULL_PEN
-    call GetStockObject
-    mov qword ptr [rip+g_nullpen], rax
-    mov ecx, 5                      # NULL_BRUSH
-    call GetStockObject
-    mov qword ptr [rip+g_nullbrush], rax
-    mov rcx, qword ptr [rip+g_hdc]
-    mov rdx, qword ptr [rip+g_dcbrush]
-    call SelectObject
-    mov rcx, qword ptr [rip+g_hdc]
-    mov rdx, qword ptr [rip+g_nullpen]
-    call SelectObject
-    mov rcx, qword ptr [rip+g_hdc]
-    mov edx, 2                      # GM_ADVANCED
-    call SetGraphicsMode
-    mov rcx, qword ptr [rip+g_hdc]
-    mov edx, 1                      # TRANSPARENT
-    call SetBkMode
-    # polices
-    mov ecx, -80
-    xor edx, edx
-    xor r8d, r8d
-    xor r9d, r9d
-    mov dword ptr [rsp+32], 700
-    mov dword ptr [rsp+40], 0
-    mov dword ptr [rsp+48], 0
-    mov dword ptr [rsp+56], 0
-    mov dword ptr [rsp+64], 0
-    mov dword ptr [rsp+72], 0
-    mov dword ptr [rsp+80], 0
-    mov dword ptr [rsp+88], 4       # ANTIALIASED_QUALITY
-    mov dword ptr [rsp+96], 0
-    lea rax, [rip+c_face]
-    mov qword ptr [rsp+104], rax
-    call CreateFontA
-    mov qword ptr [rip+g_fontG], rax
-    mov ecx, -84
-    xor edx, edx
-    xor r8d, r8d
-    xor r9d, r9d
-    mov dword ptr [rsp+32], 700
-    mov dword ptr [rsp+40], 0
-    mov dword ptr [rsp+48], 0
-    mov dword ptr [rsp+56], 0
-    mov dword ptr [rsp+64], 0
-    mov dword ptr [rsp+72], 0
-    mov dword ptr [rsp+80], 0
-    mov dword ptr [rsp+88], 4
-    mov dword ptr [rsp+96], 0
-    lea rax, [rip+c_face]
-    mov qword ptr [rsp+104], rax
-    call CreateFontA
-    mov qword ptr [rip+g_fontH], rax
-    mov ecx, -60
-    xor edx, edx
-    xor r8d, r8d
-    xor r9d, r9d
-    mov dword ptr [rsp+32], 600
-    mov dword ptr [rsp+40], 0
-    mov dword ptr [rsp+48], 0
-    mov dword ptr [rsp+56], 0
-    mov dword ptr [rsp+64], 0
-    mov dword ptr [rsp+72], 0
-    mov dword ptr [rsp+80], 0
-    mov dword ptr [rsp+88], 4
-    mov dword ptr [rsp+96], 0
-    lea rax, [rip+c_face]
-    mov qword ptr [rsp+104], rax
-    call CreateFontA
-    mov qword ptr [rip+g_fontM], rax
-    mov ecx, -46
-    xor edx, edx
-    xor r8d, r8d
-    xor r9d, r9d
-    mov dword ptr [rsp+32], 700
-    mov dword ptr [rsp+40], 0
-    mov dword ptr [rsp+48], 0
-    mov dword ptr [rsp+56], 0
-    mov dword ptr [rsp+64], 0
-    mov dword ptr [rsp+72], 0
-    mov dword ptr [rsp+80], 0
-    mov dword ptr [rsp+88], 4
-    mov dword ptr [rsp+96], 0
-    lea rax, [rip+c_face]
-    mov qword ptr [rsp+104], rax
-    call CreateFontA
-    mov qword ptr [rip+g_fontB], rax
-    rdtsc
-    shl rdx, 32
-    or rax, rdx
-    or rax, 1
-    mov qword ptr [rip+g_rng], rax
-    call init_dice
-    call new_game
     LEAVE
 
 # ---------- fenêtre ----------
@@ -1621,11 +1166,7 @@ WndProc:
 .Lw_create:
     mov qword ptr [rip+g_hwnd], rbx
     call init_gfx
-    mov rcx, rbx
-    mov edx, 1
-    mov r8d, 15
-    xor r9d, r9d
-    call SetTimer
+    call ensure_timer
     xor eax, eax
     LEAVE
 .Lw_destroy:
@@ -1636,14 +1177,26 @@ WndProc:
 .Lw_timer:
     call tick
     cmp dword ptr [rip+g_dirty], 0
-    je .Lw_zero
+    je .Lw_idle
     mov rcx, rbx
-    xor edx, edx
+    lea rdx, [rip+g_R]
     xor r8d, r8d
-    call InvalidateRect
+    cmp dword ptr [rip+g_full], 0
+    je 1f
+    xor edx, edx                    # image complète : toute la fenêtre
+1:  call InvalidateRect
+.Lw_idle:
+    cmp dword ptr [rip+g_rolling], 0
+    jne .Lw_zero
+    cmp dword ptr [rip+g_wake], 0
+    jne .Lw_zero
+    call kill_timer                 # rien à animer : la minuterie s'arrête
 .Lw_zero:
     xor eax, eax
     LEAVE
+.Lw_kick:
+    call ensure_timer
+    jmp .Lw_zero
 .Lw_paint:
     mov rcx, rbx
     lea rdx, [rip+g_ps]
@@ -1652,18 +1205,24 @@ WndProc:
     cmp dword ptr [rip+g_dirty], 0
     je 1f
     call render_frame
-1:  mov rcx, r15
-    xor edx, edx
-    xor r8d, r8d
-    mov r9d, WW
-    mov dword ptr [rsp+32], WH
+1:  mov eax, dword ptr [rip+g_ps+20]
+    sub eax, dword ptr [rip+g_ps+12]
+    jle 2f
+    mov r9d, eax                    # largeur de la zone à recopier
+    mov eax, dword ptr [rip+g_ps+24]
+    sub eax, dword ptr [rip+g_ps+16]
+    jle 2f
+    mov dword ptr [rsp+32], eax
     mov rax, qword ptr [rip+g_hdcSmall]
     mov qword ptr [rsp+40], rax
-    mov dword ptr [rsp+48], 0
-    mov dword ptr [rsp+56], 0
+    mov edx, dword ptr [rip+g_ps+12]
+    mov r8d, dword ptr [rip+g_ps+16]
+    mov dword ptr [rsp+48], edx
+    mov dword ptr [rsp+56], r8d
     mov dword ptr [rsp+64], 0x00CC0020
+    mov rcx, r15
     call BitBlt
-    mov rcx, rbx
+2:  mov rcx, rbx
     lea rdx, [rip+g_ps]
     call EndPaint
     xor eax, eax
@@ -1671,32 +1230,61 @@ WndProc:
 .Lw_key:
     cmp r13d, 0x1B
     je .Lw_destroy
-    cmp r13d, 0x7B
+    cmp r13d, 0x7B                  # F12 : capture
     jne 1f
     call save_bmp
     jmp .Lw_zero
-1:  cmp r13d, 0x20
+1:  cmp r13d, 0x20                  # Espace
     jne 2f
     call player_press_main
-    jmp .Lw_zero
-2:  cmp r13d, 0x0D
+    jmp .Lw_kick
+2:  cmp r13d, 0x0D                  # Entrée
     jne 3f
     call player_press_second
-    jmp .Lw_zero
-3:  cmp r13d, 0x44
-    jne .Lw_zero
+    jmp .Lw_kick
+3:  cmp r13d, 0x44                  # D : valeurs de contrôle dans le titre
+    jne 4f
     call debug_title
     jmp .Lw_zero
+4:  cmp r13d, 0x46                  # F : image complète
+    jne 5f
+    mov dword ptr [rip+g_full], 1
+    mov dword ptr [rip+g_dirty], 1
+    jmp .Lw_kick
+5:  cmp r13d, 0x51                  # Q : mode suivant
+    jne 6f
+    mov ecx, dword ptr [rip+g_mode]
+    inc ecx
+    and ecx, 3
+    mov dword ptr [rip+g_auto], 0
+    call set_mode
+    jmp .Lw_kick
+6:  cmp r13d, 0x30                  # 0 : qualité automatique
+    jne 7f
+    mov dword ptr [rip+g_auto], 1
+    jmp .Lw_kick
+7:  cmp r13d, 0x31                  # 1-4 : mode choisi
+    jb 8f
+    cmp r13d, 0x34
+    ja 8f
+    mov ecx, r13d
+    sub ecx, 0x31
+    mov dword ptr [rip+g_auto], 0
+    call set_mode
+    jmp .Lw_kick
+8:  cmp r13d, 0x42                  # B : budget minuscule (test de la bascule automatique)
+    jne .Lw_zero
+    mov qword ptr [rip+g_budget], 1
+    mov dword ptr [rip+g_auto], 1
+    jmp .Lw_kick
 .Lw_click:
     mov ecx, r14d
     and ecx, 0xFFFF
-    add ecx, ecx
     mov edx, r14d
     shr edx, 16
     and edx, 0xFFFF
-    add edx, edx
     call on_click
-    jmp .Lw_zero
+    jmp .Lw_kick
 
 # ---------- point d'entrée ----------
 start:
@@ -1766,4 +1354,5 @@ start:
     xor ecx, ecx
     call ExitProcess
 
+.include "render.s"
 .include "game.s"
