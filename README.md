@@ -26,7 +26,13 @@ Quatre modes (affichés dans le titre de la fenêtre) :
 | `4` | Éco | GDI en 1x sans anticrénelage, 30 images/s |
 
 `0` = qualité automatique (par défaut) : le jeu descend de mode si les images dépassent le budget de 12 ms.
-`Q` = mode suivant, `F` = redessin complet, `D` = valeurs de contrôle dans le titre, `B` = budget minuscule (test de la bascule).
+`Q` = mode suivant, `F` = redessin complet, `D` = valeurs de contrôle dans le titre, `B` = budgets minuscules (test de la bascule).
+
+## Repli en mode terminal
+Si même le mode Éco est trop lent (plus de 30 ms par image), si la fenêtre ou ses tampons ne peuvent pas être créés,
+ou si le décor met plus de 800 ms à se dessiner, le jeu masque la fenêtre et continue **dans une console** (UTF-8,
+couleurs ANSI, mêmes règles et même bot). On peut aussi le demander : touche `5`, ou lancer `421.exe -t`.
+Dans la console : Entrée pour lancer, chiffres des dés à relancer (ex. `13`), `q` pour quitter.
 
 ## Compiler
 `build.bat` (utilise le gcc/as/ld de MSYS2 : `C:\msys64\ucrt64\bin`).
@@ -35,5 +41,6 @@ Quatre modes (affichés dans le titre de la fenêtre) :
 - `421.s` : fenêtre, moteur 3D iso, dés, table, jetons, animation.
 - `render.s` : rendu : décor en cache, zones modifiées, modes de qualité, GDI+ à la demande, rastériseur anticrénelé.
 - `game.s` : règles, bot, boutons, interface (inclus par `421.s`).
-- `shot.py`, `autoplay.py`, `bench.py`, `imgdiff.py`, `tools.py` : outils de test (captures, partie automatique,
-  mesures par mode, comparaison d'images).
+- `term.s` : repli en mode terminal (console), mêmes règles que `game.s`.
+- `shot.py`, `autoplay.py`, `bench.py`, `imgdiff.py`, `termtest.py`, `tools.py` : outils de test (captures, partie
+  automatique, mesures par mode, comparaison d'images, partie en mode terminal).

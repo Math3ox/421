@@ -1153,6 +1153,8 @@ WndProc:
     je .Lw_create
     cmp r12d, 2
     je .Lw_destroy
+    cmp r12d, 0x400
+    je .Lw_term
 .Lw_def:
     mov rcx, rbx
     mov edx, r12d
@@ -1166,9 +1168,19 @@ WndProc:
 .Lw_create:
     mov qword ptr [rip+g_hwnd], rbx
     call init_gfx
-    call ensure_timer
+    cmp dword ptr [rip+g_gfxfail], 0
+    je 1f
+    mov eax, -1                     # graphique impossible : la création échoue, on passe au terminal
+    LEAVE
+1:  call ensure_timer
     xor eax, eax
     LEAVE
+.Lw_term:
+    call kill_timer
+    mov rcx, rbx
+    xor edx, edx                    # SW_HIDE
+    call ShowWindow
+    call term_main
 .Lw_destroy:
     xor ecx, ecx
     call PostQuitMessage
@@ -1272,9 +1284,13 @@ WndProc:
     mov dword ptr [rip+g_auto], 0
     call set_mode
     jmp .Lw_kick
-8:  cmp r13d, 0x42                  # B : budget minuscule (test de la bascule automatique)
+8:  cmp r13d, 0x35                  # 5 : mode terminal
+    jne 9f
+    jmp .Lw_term
+9:  cmp r13d, 0x42                  # B : budgets minuscules (test de la bascule automatique)
     jne .Lw_zero
     mov qword ptr [rip+g_budget], 1
+    mov qword ptr [rip+g_budget_eco], 1
     mov dword ptr [rip+g_auto], 1
     jmp .Lw_kick
 .Lw_click:
@@ -1293,6 +1309,29 @@ start:
     call GetModuleHandleA
     mov qword ptr [rip+g_hinst], rax
     call SetProcessDPIAware
+    call GetCommandLineA                    # option " -t" : terminal directement, sans fenêtre
+    mov rsi, rax
+.Lcl:
+    movzx eax, byte ptr [rsi]
+    test al, al
+    jz .Lcl_done
+    cmp al, 32
+    jne .Lcl_next
+    cmp byte ptr [rsi+1], 45
+    jne .Lcl_next
+    cmp byte ptr [rsi+2], 116
+    jne .Lcl_next
+    movzx eax, byte ptr [rsi+3]
+    test al, al
+    jz .Ltermstart
+    cmp al, 32
+    je .Ltermstart
+.Lcl_next:
+    inc rsi
+    jmp .Lcl
+.Ltermstart:
+    call term_main
+.Lcl_done:
     lea rdi, [rip+g_wc]
     mov dword ptr [rdi], 80
     mov dword ptr [rdi+4], 3                # CS_HREDRAW | CS_VREDRAW
@@ -1337,6 +1376,9 @@ start:
     mov qword ptr [rsp+80], rax
     mov qword ptr [rsp+88], 0
     call CreateWindowExA
+    test rax, rax
+    jnz .Lloop
+    call term_main                          # fenêtre impossible : terminal
 .Lloop:
     lea rcx, [rip+g_msgbuf]
     xor edx, edx
@@ -1356,3 +1398,4 @@ start:
 
 .include "render.s"
 .include "game.s"
+.include "term.s"

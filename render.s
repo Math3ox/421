@@ -131,6 +131,9 @@ g_q0:       .skip 8
 g_q1:       .skip 8
 g_sumdt:    .skip 8
 g_budget:   .skip 8
+g_budget_eco: .skip 8
+g_gfxfail:  .skip 4
+g_toterm:   .skip 4
 g_cnt:      .skip 4
 g_frames:   .skip 4
 pp_n:       .skip 4
@@ -1985,11 +1988,16 @@ adapt_quality:
     div rcx
     mov qword ptr [rip+g_sumdt], 0
     mov dword ptr [rip+g_cnt], 0
-    cmp rax, qword ptr [rip+g_budget]
-    jbe .Laq_end
     mov ecx, dword ptr [rip+g_mode]
     cmp ecx, 3
-    jae .Laq_end
+    jb .Laq_cmp
+    cmp rax, qword ptr [rip+g_budget_eco]   # Éco : on ne peut plus descendre
+    jbe .Laq_end
+    call goto_terminal
+    jmp .Laq_end
+.Laq_cmp:
+    cmp rax, qword ptr [rip+g_budget]
+    jbe .Laq_end
     cmp ecx, 2
     jae 1f
     mov ecx, 2                              # Haute / GDI+  ->  Rapide
@@ -1999,7 +2007,20 @@ adapt_quality:
 .Laq_end:
     LEAVE
 
-# gp_ready : eax = 1 si GDI+ est utilisable
+# goto_terminal : demande à la fenêtre de passer en mode terminal (message traité hors du rendu)
+goto_terminal:
+    sub rsp, 40
+    cmp dword ptr [rip+g_toterm], 0
+    jne 1f
+    mov dword ptr [rip+g_toterm], 1
+    mov rcx, qword ptr [rip+g_hwnd]
+    mov edx, 0x400                  # WM_USER
+    xor r8d, r8d
+    xor r9d, r9d
+    call PostMessageA
+1:  add rsp, 40
+    ret
+
 # set_mode : ecx = mode 0..3
 set_mode:
     ENTER
@@ -2122,6 +2143,12 @@ init_gfx:
     mov rcx, qword ptr [rip+g_hwnd]
     mov rdx, r12
     call ReleaseDC
+    cmp qword ptr [rip+g_smallbits], 0      # tampons indisponibles : repli en terminal
+    je .Lig_fail
+    cmp qword ptr [rip+g_bg1bits], 0
+    je .Lig_fail
+    cmp qword ptr [rip+g_bgbits], 0
+    je .Lig_fail
     # polices : jeu 2x (indices 0-3) puis jeu 1x (4-7) : étiquettes, titre, messages, boutons
     lea r13, [rip+g_fonts]
     mov ecx, -80
@@ -2170,12 +2197,20 @@ init_gfx:
     mov ecx, 1000
     div rcx
     mov qword ptr [rip+g_budget], rax       # budget : 12 ms par image
+    mov rax, qword ptr [rip+g_qpf]
+    imul rax, rax, 30
+    xor edx, edx
+    mov ecx, 1000
+    div rcx
+    mov qword ptr [rip+g_budget_eco], rax   # Éco : 30 ms par image, sinon terminal
     rdtsc
     shl rdx, 32
     or rax, rdx
     or rax, 1
     mov qword ptr [rip+g_rng], rax
     call alloc_big
+    cmp qword ptr [rip+g_bigbits], 0
+    je .Lig_fail
     call build_bg                           # décor : rendu une fois
     xor r12d, r12d                          # mode de départ selon la vitesse du rendu du décor
     mov rax, qword ptr [rip+g_qpf]
@@ -2194,8 +2229,18 @@ init_gfx:
     cmp qword ptr [rip+g_tbg], rax
     jbe 1f
     mov r12d, 3                             # très lente : mode Eco
+    mov rax, qword ptr [rip+g_qpf]
+    imul rax, rax, 800
+    xor edx, edx
+    mov ecx, 1000
+    div rcx
+    cmp qword ptr [rip+g_tbg], rax
+    ja .Lig_fail                            # même le décor est trop lent : terminal
 1:  mov ecx, r12d
     call set_mode
     call init_dice
     call new_game
+    LEAVE
+.Lig_fail:
+    mov dword ptr [rip+g_gfxfail], 1
     LEAVE
