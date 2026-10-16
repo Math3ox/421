@@ -9,7 +9,7 @@ Double-clic sur `421.exe`.
 
 ## Jouer
 - **LANCER** : lance les trois dés (3 lancers maximum ; le 2e joueur ne peut pas lancer plus de fois que le 1er).
-- Clique sur les dés à **garder** (ils se soulèvent, disque doré), puis **RELANCER** les autres ou **VALIDER**.
+- Clique sur les dés à **relancer** (ils se soulèvent, disque doré), puis **RELANCER** ; ou **VALIDER** pour garder ta main telle quelle.
 - Le perdant de la manche prend dans le pot les jetons de la combinaison gagnante ; pot vide, le gagnant repasse les siens.
   Le premier sans jeton gagne. Valeurs : 421 (8), 111 (7), 11X et XXX (X), suites (2), le reste (1).
 - Raccourcis : Espace = bouton du haut, Entrée = VALIDER, F12 = capture `421_shot.bmp`, Échap = quitter.

@@ -60,7 +60,8 @@ t_bot_first: .asciz "Le bot commence..."
 t_rolling:   .asciz "Les d\351s roulent..."
 t_ch1:       .asciz "Lancer "
 t_slash:     .asciz "/"
-t_ch2:       .asciz " : clique sur les d\351s \340 garder, puis RELANCER ou VALIDER."
+t_ch2:       .asciz " : clique sur les d\351s \340 relancer, puis RELANCER (ou VALIDER pour garder)."
+t_nosel:     .asciz "Clique d'abord sur les d\351s \340 relancer, ou VALIDER pour garder ta main."
 t_toi:       .asciz "Toi : "
 t_bot:       .asciz "Bot : "
 t_gap:       .asciz "        "
@@ -381,14 +382,18 @@ player_press_main:
     imul eax, r12d, DSTRIDE
     lea rsi, [rip+g_dice]
     cmp dword ptr [rsi+rax+D_HELD], 0
-    jne 1f
-    bts ebx, r12d
+    je 1f
+    bts ebx, r12d                   # dé sélectionné = à relancer
 1:  inc r12d
     cmp r12d, 3
     jb .Lpm_m
     test ebx, ebx
     jnz 2f
-    call finish_player_turn         # tout gardé : on valide
+    lea rdi, [rip+g_line1]          # rien de sélectionné : on le dit
+    call msg_start
+    lea rsi, [rip+t_nosel]
+    call msg_str
+    mov dword ptr [rip+g_dirty], 1
     jmp .Lpm_end
 2:  call clear_held
     inc dword ptr [rip+g_pthrows]

@@ -1017,8 +1017,8 @@ calc_pt:
     .endr
     ret
 
-# draw_die : rdi = dé
-draw_die:
+# draw_die_shadow : rdi = dé (ombre portée seulement)
+draw_die_shadow:
     ENTER
     mov rbx, rdi
     mov rax, qword ptr [rbx+D_P]
@@ -1067,6 +1067,18 @@ draw_die:
     inc r12d
     cmp r12d, 6
     jb .Lsh_face
+    LEAVE
+
+# draw_die : rdi = dé (corps : faces visibles et points)
+draw_die:
+    ENTER
+    mov rbx, rdi
+    mov rax, qword ptr [rbx+D_P]
+    mov qword ptr [rip+g_P], rax
+    mov rax, qword ptr [rbx+D_P+8]
+    mov qword ptr [rip+g_P+8], rax
+    mov rax, qword ptr [rbx+D_P+16]
+    mov qword ptr [rip+g_P+16], rax
     # --- faces visibles ---
     xor r12d, r12d
 .Lface:
@@ -1240,6 +1252,17 @@ draw_dice_all:
     jb .Ldd_j
     dec r13d
     jnz .Ldd_pass
+    xor r12d, r12d
+.Ldd_sh:
+    lea rax, [rip+g_order]
+    movzx eax, byte ptr [rax+r12]
+    imul eax, eax, DSTRIDE
+    lea rdi, [rip+g_dice]
+    add rdi, rax
+    call draw_die_shadow
+    inc r12d
+    cmp r12d, 6
+    jb .Ldd_sh
     xor r12d, r12d
 .Ldd:
     lea rax, [rip+g_order]
