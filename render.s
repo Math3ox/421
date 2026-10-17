@@ -1426,11 +1426,8 @@ draw_labels:
     call draw_ground_text
     lea rdi, [rip+g_lbl]
     call msg_start
-    lea rsi, [rip+l_toi]
-    cmp dword ptr [rip+g_twop], 0
-    je 1f
-    lea rsi, [rip+l_j1]
-1:  call msg_str
+    xor ecx, ecx
+    call msg_lbl
     mov eax, dword ptr [rip+g_ptok]
     call msg_num
     lea rsi, [rip+g_lbl]
@@ -1439,11 +1436,8 @@ draw_labels:
     call draw_ground_text
     lea rdi, [rip+g_lbl]
     call msg_start
-    lea rsi, [rip+l_bot]
-    cmp dword ptr [rip+g_twop], 0
-    je 2f
-    lea rsi, [rip+l_j2]
-2:  call msg_str
+    mov ecx, 1
+    call msg_lbl
     mov eax, dword ptr [rip+g_btok]
     call msg_num
     lea rsi, [rip+g_lbl]
@@ -1479,7 +1473,10 @@ draw_hud:
     lea rsi, [rip+t_sep]
     call msg_str
     lea rsi, [rip+t_m2p]
-    call msg_str
+    cmp dword ptr [rip+g_twop], 2
+    jne 3f
+    lea rsi, [rip+n_online]
+3:  call msg_str
     jmp 2f
 1:  lea rsi, [rip+t_sep]
     call msg_str

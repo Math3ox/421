@@ -952,15 +952,17 @@ tick:
     mov dword ptr [rip+g_dirty], 1
 .Ltk_wake:
     cmp dword ptr [rip+g_wake], 0
-    je .Ltk_done
+    je .Ltk_net
     call GetTickCount
     sub eax, dword ptr [rip+g_wake]
-    js .Ltk_done
+    js .Ltk_net
     mov dword ptr [rip+g_wake], 0
     mov ecx, dword ptr [rip+g_wakeact]
     call do_action
     mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
+.Ltk_net:
+    call net_pump
 .Ltk_done:
     LEAVE
 
@@ -1156,6 +1158,10 @@ WndProc:
     je .Lw_key
     cmp r12d, 0x201
     je .Lw_click
+    cmp r12d, 0x401
+    je .Lw_net
+    cmp r12d, 0x102
+    je .Lw_char
     cmp r12d, 1
     je .Lw_create
     cmp r12d, 2
@@ -1233,6 +1239,9 @@ WndProc:
     jne .Lw_zero
     cmp dword ptr [rip+g_wake], 0
     jne .Lw_zero
+    mov eax, dword ptr [rip+nq_head]
+    cmp eax, dword ptr [rip+nq_tail]
+    jne .Lw_zero
     call kill_timer                 # rien à animer : la minuterie s'arrête
 .Lw_zero:
     xor eax, eax
@@ -1292,8 +1301,18 @@ WndProc:
     xor eax, eax
     LEAVE
 .Lw_key:
+    cmp dword ptr [rip+g_menu], 0           # menu multijoueur ouvert : il prend les touches
+    je .Lw_nomenu
+    mov ecx, r13d
+    call net_menu_key
+    jmp .Lw_kick
+.Lw_nomenu:
     cmp r13d, 0x1B
     jne .Lw_f0
+    cmp dword ptr [rip+g_net], 1            # attente / connexion en ligne : Échap annule
+    je .Lw_netcancel
+    cmp dword ptr [rip+g_net], 2
+    je .Lw_netcancel
     cmp dword ptr [rip+g_fsmode], 0
     je .Lw_destroy
     call toggle_fullscreen          # Échap quitte d'abord le plein écran
@@ -1306,17 +1325,22 @@ WndProc:
     call opt_save
     jmp .Lw_kick
 .Lw_f1:
+    cmp r13d, 0x4E                  # N : multijoueur en ligne
+    jne .Lw_nn
+    call net_open
+    jmp .Lw_kick
+.Lw_nn:
     cmp r13d, 0x7B                  # F12 : capture
     jne 1f
     call save_bmp
     jmp .Lw_zero
 1:  cmp r13d, 0x20                  # Espace
     jne 2f
-    call player_press_main
+    call ui_main
     jmp .Lw_kick
 2:  cmp r13d, 0x0D                  # Entrée
     jne 3f
-    call player_press_second
+    call ui_second
     jmp .Lw_kick
 3:  cmp r13d, 0x44                  # D : valeurs de contrôle dans le titre
     jne 4f
@@ -1392,6 +1416,18 @@ WndProc:
     jmp .Lw_kick
 .endif
     jmp .Lw_zero
+.Lw_net:
+    mov rcx, r13
+    mov edx, r14d
+    call net_event
+    jmp .Lw_kick
+.Lw_char:
+    mov ecx, r13d
+    call net_char
+    jmp .Lw_kick
+.Lw_netcancel:
+    call net_cancel
+    jmp .Lw_kick
 .Lw_click:
     mov ecx, r14d
     and ecx, 0xFFFF
@@ -1506,3 +1542,4 @@ start:
 .include "game.s"
 .include "term.s"
 .include "ai.s"
+.include "net.s"

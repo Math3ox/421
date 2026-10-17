@@ -61,7 +61,9 @@ w_bot:       .asciz "Bot"
 w_j1:        .asciz "Joueur 1"
 w_j2:        .asciz "Joueur 2"
 .balign 8
-who_names:   .quad w_toi, w_bot, w_j1, w_j2
+w_adv:       .asciz "Adversaire"
+.balign 8
+who_names:   .quad w_toi, w_bot, w_j1, w_j2, w_toi, w_adv, w_adv, w_toi
 t_colon:     .asciz " : "
 t_first2:    .asciz " commence ! Lance les d\351s (3 lancers max)."
 t_turn2a:    .asciz " : lance les d\351s ("
@@ -83,7 +85,7 @@ t_dash:      .asciz " - "
 t_m1p:       .asciz "1 joueur"
 t_m2p:       .asciz "2 joueurs"
 t_bot2:      .asciz "Bot "
-t_hint:      .asciz "J : 1 ou 2 joueurs  -  L : niveau du bot  -  H : aide  -  P : pot  -  F11 : plein \351cran"
+t_hint:      .asciz "J : 1/2 joueurs  -  L : bot  -  H : aide  -  P : pot  -  N : en ligne  -  F11 : plein \351cran"
 t_manche:    .asciz "Manche "
 t_you_first: .asciz "Tu commences ! Lance les d\351s (3 lancers max)."
 t_bot_first: .asciz "Le bot commence..."
@@ -350,7 +352,11 @@ refresh_dice:
 # msg_who : ecx = 0/1 -> ajoute le nom du joueur (Toi / Bot ou Joueur 1 / Joueur 2)
 msg_who:
     mov eax, dword ptr [rip+g_twop]
-    lea eax, [rcx+rax*2]
+    cmp eax, 2                                  # en ligne : lignes 2 (hôte) et 3 (invité)
+    jne 1f
+    mov eax, dword ptr [rip+g_myseat]
+    add eax, 2
+1:  lea eax, [rcx+rax*2]
     lea rdx, [rip+who_names]
     mov rsi, qword ptr [rdx+rax*8]
     jmp msg_str
@@ -366,6 +372,7 @@ msg_hand:
 
 new_game:
     ENTER
+    inc dword ptr [rip+g_gameid]
     mov eax, dword ptr [rip+g_potinit]
     mov dword ptr [rip+g_pot], eax
     mov dword ptr [rip+g_ptok], 0
@@ -398,7 +405,12 @@ begin_round:
     lea rsi, [rip+t_you_first]
     call msg_str
     jmp .Lbr_end
-1:  xor ecx, ecx
+1:  cmp dword ptr [rip+g_twop], 2
+    jne .Lbr_h1
+    call net_turn_msg
+    jmp .Lbr_end
+.Lbr_h1:
+    xor ecx, ecx
     call msg_who
     lea rsi, [rip+t_first2]
     call msg_str
@@ -408,6 +420,11 @@ begin_round:
     je .Lbr_bot
     mov dword ptr [rip+g_cur], 1                # le joueur 2 commence
     mov dword ptr [rip+g_phase], PH_PREROLL
+    cmp dword ptr [rip+g_twop], 2
+    jne .Lbr_h2
+    call net_turn_msg
+    jmp .Lbr_end
+.Lbr_h2:
     lea rdi, [rip+g_line1]
     call msg_start
     mov ecx, 1
@@ -541,6 +558,12 @@ on_roll_done:
     mov eax, dword ptr [rip+g_lim]
     call msg_num
     lea rsi, [rip+t_ch2]
+    cmp dword ptr [rip+g_twop], 2
+    jne .Lrd_nn
+    cmp r12d, dword ptr [rip+g_myseat]
+    je .Lrd_nn
+    lea rsi, [rip+n_ch2]                        # en ligne : c'est l'adversaire qui choisit
+.Lrd_nn:
     call msg_str
     lea ecx, [r12+r12*2]
     call score_hand
@@ -614,6 +637,11 @@ finish_player_turn:
     lea rdx, [rip+g_pthrows]
     mov dword ptr [rdx+rax*4], 0
     mov dword ptr [rip+g_phase], PH_PREROLL
+    cmp dword ptr [rip+g_twop], 2
+    jne .Lfp_h2
+    call net_turn_msg
+    jmp .Lfp_end
+.Lfp_h2:
     lea rdi, [rip+g_line1]
     call msg_start
     mov ecx, dword ptr [rip+g_cur]
@@ -800,6 +828,15 @@ resolve_round:
 1:  call msg_str
     jmp .Lrr_num
 .Lrr_msg2:
+    cmp dword ptr [rip+g_twop], 2
+    jne .Lrr_h
+    lea rsi, [rip+n_winr]                       # en ligne : phrases à la 2e personne
+    cmp r13d, dword ptr [rip+g_myseat]
+    je 1f
+    lea rsi, [rip+n_losr]
+1:  call msg_str
+    jmp .Lrr_num
+.Lrr_h:
     mov ecx, r13d
     call msg_who
     lea rsi, [rip+t_wm1]
@@ -837,7 +874,16 @@ resolve_round:
     inc dword ptr [rip+g_wins]
     call opt_save
     jmp 3f
-2:  xor ecx, ecx
+2:  cmp dword ptr [rip+g_twop], 2
+    jne .Lrr_w2
+    lea rsi, [rip+n_victory]                    # en ligne : le siège 0 gagne
+    cmp dword ptr [rip+g_myseat], 0
+    je 4f
+    lea rsi, [rip+n_defeat]
+4:  call msg_str
+    jmp 3f
+.Lrr_w2:
+    xor ecx, ecx
     call msg_who
     lea rsi, [rip+t_gw2]
     call msg_str
@@ -853,7 +899,16 @@ resolve_round:
     inc dword ptr [rip+g_losses]
     call opt_save
     jmp 3f
-2:  mov ecx, 1
+2:  cmp dword ptr [rip+g_twop], 2
+    jne .Lrr_l2
+    lea rsi, [rip+n_victory]                    # en ligne : le siège 1 gagne
+    cmp dword ptr [rip+g_myseat], 1
+    je 4f
+    lea rsi, [rip+n_defeat]
+4:  call msg_str
+    jmp 3f
+.Lrr_l2:
+    mov ecx, 1
     call msg_who
     lea rsi, [rip+t_gw2]
     call msg_str
@@ -904,6 +959,9 @@ on_click:
     je .Loc_end
     cmp eax, PH_BOT
     je .Loc_end
+    call net_can_act                            # en ligne : on ne joue que pendant notre tour
+    test eax, eax
+    jz .Loc_end
     mov ecx, r12d
     mov edx, r13d
     movsd xmm0, qword ptr [rip+k_btna]
@@ -911,7 +969,7 @@ on_click:
     call hit_button
     test eax, eax
     jz 1f
-    call player_press_main
+    call ui_main
     jmp .Loc_end
 1:  mov ecx, r12d
     mov edx, r13d
@@ -920,7 +978,7 @@ on_click:
     call hit_button
     test eax, eax
     jz 2f
-    call player_press_second
+    call ui_second
     jmp .Loc_end
 2:  cmp dword ptr [rip+g_phase], PH_CHOOSE
     jne .Loc_end
@@ -948,6 +1006,8 @@ on_click:
     mov rdi, rbx
     movsd xmm0, qword ptr [rip+k_one]
     call update_die
+    mov ecx, r14d
+    call ui_toggle                              # en ligne : l'adversaire voit le dé coché
     mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
     jmp .Loc_end
@@ -1027,13 +1087,21 @@ draw_buttons:
     jne 4f
     lea rsi, [rip+b_rejouer]
     mov ecx, 1
-4:  xor edx, edx
+4:  call net_can_act
+    mov r12d, eax
+    test eax, eax
+    jnz .Ldb_can
+    lea rsi, [rip+b_dots]
+    xor ecx, ecx
+.Ldb_can:
+    xor edx, edx
     movsd xmm0, qword ptr [rip+k_btna]
     movsd xmm1, qword ptr [rip+k_btnbm]
     call draw_button
     xor ecx, ecx
     cmp dword ptr [rip+g_phase], PH_CHOOSE
     sete cl
+    and ecx, r12d
     lea rsi, [rip+b_valider]
     mov edx, 1
     movsd xmm0, qword ptr [rip+k_btna]
@@ -1086,6 +1154,12 @@ debug_title:
     call msg_num
     lea rsi, [rip+t_sp]
     call msg_str
+    .irp v, g_cur, g_net, g_myseat, g_pot, g_ptok, g_btok, g_round
+    mov eax, dword ptr [rip+\v]
+    call msg_num
+    lea rsi, [rip+t_sp]
+    call msg_str
+    .endr
     mov eax, dword ptr [rip+g_mode]
     call msg_num
     lea rsi, [rip+t_sp]

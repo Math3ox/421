@@ -30,6 +30,16 @@ difficile bat normal dans ~58 % des parties, normal bat facile dans ~63 %.
 Les réglages (mode de rendu, pot, niveau, 1/2 joueurs, plein écran, victoires/défaites contre le bot) sont mémorisés dans
 `421.cfg` (32 octets) créé à côté de l'exécutable ; supprimer ce fichier remet les valeurs par défaut.
 
+## Multijoueur en ligne (duel à 2, IP directe)
+Touche **N** : un joueur choisit **H** (héberger), l'autre **R** (rejoindre) et tape l'IP de l'hôte (port 4210 par défaut,
+ou `ip:port`) puis Entrée ; Échap annule, `N` coupe la connexion. L'hôte est le joueur 1, l'invité le joueur 2.
+- L'hôte voit ses adresses IP à l'écran. Réseau local : la sienne (192.168.x.x). Par Internet : **VPN type Tailscale / ZeroTier**
+  (donner l'IP du VPN) ou **redirection du port TCP 4210** sur la box. Le pare-feu Windows demandera d'autoriser le jeu.
+- Principe « lockstep » : les deux PC exécutent la même partie avec le même générateur aléatoire (graine envoyée par l'hôte) ;
+  seules les **actions** (lancer, dés cochés, valider, suivant, rejouer) sont échangées, 12 octets chacune. Les deux joueurs
+  doivent avoir la même version du jeu. Si la connexion tombe, on revient à la partie locale.
+- Winsock n'est chargé qu'à l'ouverture du menu : aucun coût hors ligne. La dernière IP saisie est mémorisée dans `421.cfg`.
+
 ## Modes de rendu
 Le décor est rendu une fois et mis en cache ; à chaque image seule la zone qui bouge est redessinée.
 Quatre modes (affichés dans le titre de la fenêtre) :
@@ -60,7 +70,9 @@ Dans la console : Entrée pour lancer, chiffres des dés à relancer (ex. `13`),
 - `game.s` : règles, déroulement (1 ou 2 joueurs), boutons, interface (inclus par `421.s`).
 - `ai.s` + `aitab.s` : niveaux du bot, calcul de probabilités, aide, réglages mémorisés. `aitab.s` est **généré** par
   `gen_tables.py` (stratégie optimale).
+- `net.s` : duel en ligne (Winsock à la demande, protocole 12 octets, file d'actions, saisie de l'IP).
 - `term.s` : repli en mode terminal (console), mêmes règles que `game.s`.
 - Outils de test : `shot.py` (captures), `autoplay.py` (partie automatique), `bench.py` (mesures par mode),
   `imgdiff.py`, `termtest.py` (partie en terminal), `bottest.py` (décisions du bot asm = stratégie Python),
-  `screencap.py` (capture de l'écran, plein écran), `tools.py`.
+  `screencap.py` (capture de l'écran, plein écran), `nettest.py` (deux instances jouent en ligne et on vérifie qu'elles
+  restent identiques), `netshot.py` (captures des écrans multijoueur), `tools.py`.

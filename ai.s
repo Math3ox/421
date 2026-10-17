@@ -544,7 +544,8 @@ cycle_pot:
 
 # ---------- réglages mémorisés : 421.cfg à côté de l'exécutable (32 octets, aucun autre fichier) ----------
 # champs : magie, mode de rendu (0 = auto, 1-4), pot de départ, niveau du bot, 2 joueurs, plein écran, victoires, défaites
-.equ CFG_MAGIC, 0x01313234              # "421" + version 1
+.equ CFG_MAGIC1, 0x01313234             # "421" + version 1 (32 octets)
+.equ CFG_MAGIC, 0x02313234              # version 2 (64 octets : + dernière adresse IP)
 
 .data
 .balign 4
@@ -553,7 +554,7 @@ g_optfs:    .long 0
 .bss
 .balign 8
 g_cfgpath:  .skip 272
-g_cfg:      .skip 32
+g_cfg:      .skip 64
 .text
 
 # opt_path : g_cfgpath = chemin de l'exécutable avec l'extension remplacée par .cfg
@@ -595,16 +596,39 @@ opt_load:
     mov dword ptr [rip+g_written], 0
     mov rcx, rbx
     lea rdx, [rip+g_cfg]
-    mov r8d, 32
+    mov r8d, 64
     lea r9, [rip+g_written]
     mov qword ptr [rsp+32], 0
     call ReadFile
     mov rcx, rbx
     call CloseHandle
     cmp dword ptr [rip+g_written], 32
+    jb .Lol_end
+    mov eax, dword ptr [rip+g_cfg]
+    cmp eax, CFG_MAGIC1
+    je .Lol_fields
+    cmp eax, CFG_MAGIC
     jne .Lol_end
-    cmp dword ptr [rip+g_cfg], CFG_MAGIC
-    jne .Lol_end
+    cmp dword ptr [rip+g_written], 64
+    jb .Lol_end
+    lea rsi, [rip+g_cfg+32]                 # dernière adresse IP saisie
+    lea rdi, [rip+ns_ip]
+    mov ecx, 4
+    cld
+    rep movsq
+    mov byte ptr [rip+ns_ip+31], 0
+    xor eax, eax
+    lea rdx, [rip+ns_ip]
+.Lol_len:
+    cmp byte ptr [rdx+rax], 0
+    je .Lol_lend
+    inc eax
+    cmp eax, 21
+    jb .Lol_len
+    mov byte ptr [rdx+rax], 0
+.Lol_lend:
+    mov dword ptr [rip+ns_iplen], eax
+.Lol_fields:
     mov eax, dword ptr [rip+g_cfg+4]
     cmp eax, 4
     ja 1f
@@ -664,13 +688,21 @@ opt_save:
     mov eax, dword ptr [rip+g_level]
     mov dword ptr [rdi+12], eax
     mov eax, dword ptr [rip+g_twop]
-    mov dword ptr [rdi+16], eax
+    cmp eax, 2                              # le mode en ligne n'est pas mémorisé
+    jne 1f
+    mov eax, dword ptr [rip+g_prevtwop]
+1:  mov dword ptr [rdi+16], eax
     mov eax, dword ptr [rip+g_fsmode]
     mov dword ptr [rdi+20], eax
     mov eax, dword ptr [rip+g_wins]
     mov dword ptr [rdi+24], eax
     mov eax, dword ptr [rip+g_losses]
     mov dword ptr [rdi+28], eax
+    lea rsi, [rip+ns_ip]                    # dernière adresse IP
+    lea rdi, [rip+g_cfg+32]
+    mov ecx, 4
+    cld
+    rep movsq
     lea rcx, [rip+g_cfgpath]
     mov edx, 0x40000000                     # GENERIC_WRITE
     xor r8d, r8d
@@ -684,7 +716,7 @@ opt_save:
     mov rbx, rax
     mov rcx, rbx
     lea rdx, [rip+g_cfg]
-    mov r8d, 32
+    mov r8d, 64
     lea r9, [rip+g_written]
     mov qword ptr [rsp+32], 0
     call WriteFile
