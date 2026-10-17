@@ -17,7 +17,7 @@ Double-clic sur `421.exe` (62-72 Ko, aucune installation).
 ## Taille de la fenêtre
 La fenêtre fait 1100x800 si l'écran le permet ; sur un écran plus petit (ou très zoomé, ex. portable à 150 %), elle est
 réduite automatiquement pour tenir entièrement dans la zone de travail et centrée. Le jeu s'affiche alors mis à l'échelle
-(seule la zone modifiée est recopiée), les clics restent justes.
+(seule la zone modifiée est recopiée, interpolation bilinéaire en SSE2 : ~10 ms pour tout l'écran), les clics restent justes.
 
 ## Options (rappelées en bas de la fenêtre)
 | Touche | Effet |
@@ -80,4 +80,4 @@ Dans la console : Entrée pour lancer, chiffres des dés à relancer (ex. `13`),
 - Outils de test : `shot.py` (captures), `autoplay.py` (partie automatique), `bench.py` (mesures par mode),
   `imgdiff.py`, `termtest.py` (partie en terminal), `bottest.py` (décisions du bot asm = stratégie Python),
   `screencap.py` (capture de l'écran, plein écran), `nettest.py` (deux instances jouent en ligne et on vérifie qu'elles
-  restent identiques), `netshot.py` (captures des écrans multijoueur), `fstest.py` (plein écran mis à l'échelle + clics), `tools.py`.
+  restent identiques), `netshot.py` (captures des écrans multijoueur), `fstest.py` (plein écran mis à l'échelle + clics), `painttime.py` (temps d'un repaint en fenêtre / plein écran), `fpstest.py` (images/s pendant un lancer en plein écran), `tools.py`.

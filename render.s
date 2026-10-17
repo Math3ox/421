@@ -92,12 +92,8 @@ gpn_5:     .asciz "GdipSetSolidFillColor"
 gpn_6:     .asciz "GdipFillPolygon"
 gpn_7:     .asciz "GdipFlush"
 gpn_8:     .asciz "GdipSetClipRectI"
-gpn_9:     .asciz "GdipCreateBitmapFromScan0"
-gpn_10:    .asciz "GdipSetInterpolationMode"
-gpn_11:    .asciz "GdipDrawImageRectRectI"
-gpn_12:    .asciz "GdipDeleteGraphics"
 .balign 8
-gp_names:   .quad gpn_0, gpn_1, gpn_2, gpn_3, gpn_4, gpn_5, gpn_6, gpn_7, gpn_8, gpn_9, gpn_10, gpn_11, gpn_12
+gp_names:   .quad gpn_0, gpn_1, gpn_2, gpn_3, gpn_4, gpn_5, gpn_6, gpn_7, gpn_8
 
 .data
 .balign 8
@@ -108,8 +104,15 @@ k_w100:     .double 100.0
 k_w1100:    .double 1100.0
 k_w800:     .double 800.0
 k_eps6:     .double 0.000001
+k_256:      .double 256.0
+k_wm1:      .double 1099.0
+k_hm1:      .double 799.0
 k_i1100:    .long 1100
 k_i800:     .long 800
+k_256w:     .short 256, 256, 256, 256, 256, 256, 256, 256
+g_bmiV:     .long 40, 0, 0
+            .short 1, 32
+            .long 0, 0, 0, 0, 0, 0
 g_R:        .long WW, WH, 0, 0              # zone sale accumulée (l, t, r, b) : vide
 g_cR:       .long 0, 0, WW, WH              # zone composée à cette image
 g_mode:     .long 0
@@ -152,6 +155,14 @@ g_erase:    .skip 4
 g_fsmode:   .skip 4
 g_wrect:    .skip 16
 g_Roff:     .skip 16
+g_vhdc:     .skip 8
+g_vhbm:     .skip 8
+g_vbits:    .skip 8
+g_vw:       .skip 4
+g_vh:       .skip 4
+g_vxs:      .skip 8
+g_vys:      .skip 8
+g_vtab:     .skip 8192*8
 g_rect2:    .skip 16
 g_sc_on:    .skip 4
 g_wson:     .skip 4
@@ -204,9 +215,7 @@ ra_xe:      .skip 4
 ra_x0f:     .skip 4
 ra_y0f:     .skip 4
 gp_dll:     .skip 8
-gpf:        .skip 104
-g_gpbmp:    .skip 8
-g_gpw:      .skip 8
+gpf:        .skip 72
 g_gptoken:  .skip 8
 g_gpg:      .skip 8
 g_gpbrush:  .skip 8
@@ -614,7 +623,7 @@ gp_load:
     lea rcx, [rip+gpf]
     mov qword ptr [rcx+r13*8], rax
     inc r13d
-    cmp r13d, 13
+    cmp r13d, 9
     jb .Lgl_l
     mov qword ptr [rip+gp_dll], r12
     jmp .Lgl_end
@@ -2663,68 +2672,139 @@ view_stretch:
     call view_paint_rect
     test eax, eax
     jz .Lvs_end
-    call gp_ensure                          # GDI+ bicubique : bien plus net que StretchBlt (repli sur StretchBlt)
-    cmp qword ptr [rip+g_gpg], 0
-    je .Lvs_gdi
-    cmp qword ptr [rip+g_gpbmp], 0
-    jne 1f
-    mov ecx, WW
-    mov edx, WH
-    mov r8d, WW*4
-    mov r9d, 0x22009                        # PixelFormat32bppRGB
-    mov rax, qword ptr [rip+g_smallbits]
-    mov qword ptr [rsp+32], rax
-    lea rax, [rip+g_gpbmp]
-    mov qword ptr [rsp+40], rax
-    call qword ptr [rip+gpf+72]
+    mov rcx, r12
+    call vs_prep
     test eax, eax
-    jz 1f
-    mov qword ptr [rip+g_gpbmp], 0
-    jmp .Lvs_gdi
-1:  mov rcx, r12
-    lea rdx, [rip+g_gpw]
-    call qword ptr [rip+gpf+8]              # GdipCreateFromHDC
-    test eax, eax
-    jnz .Lvs_gdi
-    mov rcx, qword ptr [rip+g_gpw]
-    mov edx, 7                              # HighQualityBicubic
-    call qword ptr [rip+gpf+80]
-    mov rcx, qword ptr [rip+g_gpw]
-    mov edx, 4                              # PixelOffsetModeHalf
-    call qword ptr [rip+gpf+24]
-    mov rcx, qword ptr [rip+g_gpw]          # on ne repeint que la zone sale, mais on dessine toute l'image sous ce clip :
-    mov edx, dword ptr [rip+pv_dl]          # les pixels sont identiques à ceux d'un affichage complet (pas de couture)
-    mov r8d, dword ptr [rip+pv_dt]
-    mov r9d, dword ptr [rip+pv_dr]
-    sub r9d, edx
+    jz .Lvs_gdi
+    mov eax, dword ptr [rip+pv_dl]          # colonnes / lignes à calculer (coordonnées du tampon mis à l'échelle)
+    sub eax, dword ptr [rip+g_ox]
+    jns 1f
+    xor eax, eax
+1:  mov dword ptr [rsp+120], eax            # cx0
+    mov r13d, eax
+    mov eax, dword ptr [rip+pv_dr]
+    sub eax, dword ptr [rip+g_ox]
+    cmp eax, dword ptr [rip+g_vw]
+    jle 2f
+    mov eax, dword ptr [rip+g_vw]
+2:  mov dword ptr [rsp+124], eax            # cx1
+    mov r14d, eax
+    mov eax, dword ptr [rip+pv_dt]
+    sub eax, dword ptr [rip+g_oy]
+    jns 3f
+    xor eax, eax
+3:  mov dword ptr [rsp+128], eax            # ry0
+    mov r15d, eax
     mov eax, dword ptr [rip+pv_db]
-    sub eax, r8d
+    sub eax, dword ptr [rip+g_oy]
+    cmp eax, dword ptr [rip+g_vh]
+    jle 4f
+    mov eax, dword ptr [rip+g_vh]
+4:  mov dword ptr [rsp+132], eax            # ry1
+    mov ebx, eax
+    cmp r13d, r14d
+    jge .Lvs_end
+    cmp r15d, ebx
+    jge .Lvs_end
+.Lvs_row:
+    cmp r15d, ebx
+    jge .Lvs_blit
+    cvtsi2sd xmm0, r15d                     # ligne source : fy = (y + 0,5) * 800/dh - 0,5
+    addsd xmm0, qword ptr [rip+k_half]
+    mulsd xmm0, qword ptr [rip+g_vys]
+    subsd xmm0, qword ptr [rip+k_half]
+    xorpd xmm1, xmm1
+    comisd xmm0, xmm1
+    ja 5f
+    xor eax, eax
+    xor edx, edx
+    jmp 7f
+5:  comisd xmm0, qword ptr [rip+k_hm1]
+    jb 6f
+    mov eax, WH-1
+    xor edx, edx
+    jmp 7f
+6:  cvttsd2si eax, xmm0
+    cvtsi2sd xmm1, eax
+    subsd xmm0, xmm1
+    mulsd xmm0, qword ptr [rip+k_256]
+    cvtsd2si edx, xmm0
+7:  imul ecx, eax, WW*4                     # eax = y0, edx = poids de la ligne suivante (0..256)
+    movsxd rcx, ecx
+    mov rsi, qword ptr [rip+g_smallbits]
+    add rsi, rcx
+    mov rdi, rsi
+    cmp eax, WH-1
+    jge 8f
+    add rdi, WW*4
+8:  movd xmm5, edx
+    pshuflw xmm5, xmm5, 0
+    punpcklqdq xmm5, xmm5                   # xmm5 = wy
+    mov eax, 256
+    sub eax, edx
+    movd xmm4, eax
+    pshuflw xmm4, xmm4, 0
+    punpcklqdq xmm4, xmm4                   # xmm4 = 256 - wy
+    mov eax, r15d
+    imul eax, dword ptr [rip+g_vw]
+    add eax, r13d
+    movsxd rax, eax
+    mov r8, qword ptr [rip+g_vbits]
+    lea r8, [r8+rax*4]
+    lea r9, [rip+g_vtab]
+    movsxd rax, r13d
+    lea r9, [r9+rax*8]
+    mov ecx, r14d
+    sub ecx, r13d
+.Lvs_px:
+    mov eax, dword ptr [r9]                 # décalage (octets) du pixel source de gauche
+    mov edx, dword ptr [r9+4]               # poids du pixel de droite (0..256)
+    movq xmm0, qword ptr [rsi+rax]
+    movq xmm1, qword ptr [rdi+rax]
+    pxor xmm2, xmm2
+    punpcklbw xmm0, xmm2
+    punpcklbw xmm1, xmm2
+    pmullw xmm0, xmm4
+    pmullw xmm1, xmm5
+    paddw xmm0, xmm1
+    psrlw xmm0, 8                           # mélange vertical des deux pixels (x0, x0+1)
+    movd xmm2, edx
+    pshuflw xmm2, xmm2, 0
+    movdqu xmm3, xmmword ptr [rip+k_256w]
+    psubw xmm3, xmm2
+    movdqa xmm1, xmm0
+    psrldq xmm1, 8
+    pmullw xmm0, xmm3
+    pmullw xmm1, xmm2
+    paddw xmm0, xmm1
+    psrlw xmm0, 8                           # mélange horizontal
+    packuswb xmm0, xmm0
+    movd dword ptr [r8], xmm0
+    add r8, 4
+    add r9, 8
+    dec ecx
+    jnz .Lvs_px
+    inc r15d
+    jmp .Lvs_row
+.Lvs_blit:
+    mov rcx, r12
+    mov edx, dword ptr [rsp+120]
+    add edx, dword ptr [rip+g_ox]
+    mov r8d, dword ptr [rsp+128]
+    add r8d, dword ptr [rip+g_oy]
+    mov r9d, dword ptr [rsp+124]
+    sub r9d, dword ptr [rsp+120]
+    mov eax, dword ptr [rsp+132]
+    sub eax, dword ptr [rsp+128]
     mov dword ptr [rsp+32], eax
-    mov dword ptr [rsp+40], 0               # CombineModeReplace
-    call qword ptr [rip+gpf+64]
-    cvtsi2sd xmm0, dword ptr [rip+k_i1100]
-    mulsd xmm0, qword ptr [rip+g_scale]
-    cvtsd2si r13d, xmm0
-    cvtsi2sd xmm0, dword ptr [rip+k_i800]
-    mulsd xmm0, qword ptr [rip+g_scale]
-    cvtsd2si r14d, xmm0
-    mov rcx, qword ptr [rip+g_gpw]
-    mov rdx, qword ptr [rip+g_gpbmp]
-    mov r8d, dword ptr [rip+g_ox]
-    mov r9d, dword ptr [rip+g_oy]
-    mov dword ptr [rsp+32], r13d
-    mov dword ptr [rsp+40], r14d
-    mov dword ptr [rsp+48], 0
-    mov dword ptr [rsp+56], 0
-    mov dword ptr [rsp+64], WW
-    mov dword ptr [rsp+72], WH
-    mov dword ptr [rsp+80], 2               # UnitPixel
-    mov qword ptr [rsp+88], 0
-    mov qword ptr [rsp+96], 0
-    mov qword ptr [rsp+104], 0
-    call qword ptr [rip+gpf+88]
-    mov rcx, qword ptr [rip+g_gpw]
-    call qword ptr [rip+gpf+96]             # GdipDeleteGraphics
+    mov rax, qword ptr [rip+g_vhdc]
+    mov qword ptr [rsp+40], rax
+    mov eax, dword ptr [rsp+120]
+    mov dword ptr [rsp+48], eax
+    mov eax, dword ptr [rsp+128]
+    mov dword ptr [rsp+56], eax
+    mov dword ptr [rsp+64], 0x00CC0020
+    call BitBlt
     jmp .Lvs_end
 .Lvs_gdi:
     mov rcx, r12
@@ -2759,4 +2839,106 @@ view_stretch:
     mov dword ptr [rsp+80], 0x00CC0020
     call StretchBlt
 .Lvs_end:
+    LEAVE
+
+# vs_prep : rcx = hdc de la fenêtre. Prépare le tampon mis à l'échelle (DIB de la taille affichée) et la table des
+#           colonnes source (décalage + poids). eax = 1 si prêt. Interpolation bilinéaire maison (SSE2) : nette et
+#           rapide, contrairement à GDI+ bicubique (200 ms par image en plein écran).
+vs_prep:
+    ENTER
+    mov r12, rcx
+    cvtsi2sd xmm0, dword ptr [rip+k_i1100]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvtsd2si r13d, xmm0                     # largeur affichée
+    cvtsi2sd xmm0, dword ptr [rip+k_i800]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvtsd2si r14d, xmm0                     # hauteur affichée
+    test r13d, r13d
+    jle .Lvp_fail
+    test r14d, r14d
+    jle .Lvp_fail
+    cmp r13d, 8192
+    jg .Lvp_fail
+    cmp qword ptr [rip+g_vbits], 0
+    je .Lvp_alloc
+    cmp r13d, dword ptr [rip+g_vw]
+    jne .Lvp_free
+    cmp r14d, dword ptr [rip+g_vh]
+    jne .Lvp_free
+    mov eax, 1
+    jmp .Lvp_end
+.Lvp_free:
+    mov rcx, qword ptr [rip+g_vhdc]
+    call DeleteDC
+    mov rcx, qword ptr [rip+g_vhbm]
+    call DeleteObject
+    mov qword ptr [rip+g_vbits], 0
+.Lvp_alloc:
+    mov dword ptr [rip+g_bmiV+4], r13d
+    mov eax, r14d
+    neg eax
+    mov dword ptr [rip+g_bmiV+8], eax
+    mov rcx, r12
+    call CreateCompatibleDC
+    mov qword ptr [rip+g_vhdc], rax
+    test rax, rax
+    jz .Lvp_fail
+    mov rcx, r12
+    lea rdx, [rip+g_bmiV]
+    xor r8d, r8d
+    lea r9, [rip+g_vbits]
+    mov qword ptr [rsp+32], 0
+    mov dword ptr [rsp+40], 0
+    call CreateDIBSection
+    mov qword ptr [rip+g_vhbm], rax
+    test rax, rax
+    jz .Lvp_fail
+    mov rcx, qword ptr [rip+g_vhdc]
+    mov rdx, rax
+    call SelectObject
+    mov dword ptr [rip+g_vw], r13d
+    mov dword ptr [rip+g_vh], r14d
+    cvtsi2sd xmm2, dword ptr [rip+k_i1100]  # pas source par pixel affiché
+    cvtsi2sd xmm3, r13d
+    divsd xmm2, xmm3
+    movsd qword ptr [rip+g_vxs], xmm2
+    cvtsi2sd xmm2, dword ptr [rip+k_i800]
+    cvtsi2sd xmm3, r14d
+    divsd xmm2, xmm3
+    movsd qword ptr [rip+g_vys], xmm2
+    xor ecx, ecx
+    lea r8, [rip+g_vtab]
+.Lvp_t:
+    cvtsi2sd xmm0, ecx                      # fx = (cx + 0,5) * 1100/dw - 0,5
+    addsd xmm0, qword ptr [rip+k_half]
+    mulsd xmm0, qword ptr [rip+g_vxs]
+    subsd xmm0, qword ptr [rip+k_half]
+    xorpd xmm1, xmm1
+    comisd xmm0, xmm1
+    ja 1f
+    xor eax, eax                            # avant le premier pixel
+    xor edx, edx
+    jmp 3f
+1:  comisd xmm0, qword ptr [rip+k_wm1]
+    jb 2f
+    mov eax, WW-2                           # après le dernier : uniquement le pixel de droite
+    mov edx, 256
+    jmp 3f
+2:  cvttsd2si eax, xmm0
+    cvtsi2sd xmm1, eax
+    subsd xmm0, xmm1
+    mulsd xmm0, qword ptr [rip+k_256]
+    cvtsd2si edx, xmm0
+3:  shl eax, 2
+    mov dword ptr [r8], eax
+    mov dword ptr [r8+4], edx
+    add r8, 8
+    inc ecx
+    cmp ecx, r13d
+    jb .Lvp_t
+    mov eax, 1
+    jmp .Lvp_end
+.Lvp_fail:
+    xor eax, eax
+.Lvp_end:
     LEAVE
