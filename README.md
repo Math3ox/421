@@ -14,6 +14,11 @@ Double-clic sur `421.exe` (62-72 Ko, aucune installation).
   Le premier sans jeton gagne. Valeurs : 421 (8), 111 (7), 11X et XXX (X), suites (2), le reste (1).
 - Raccourcis : Espace = bouton du haut, Entrée = VALIDER, F12 = capture `421_shot.bmp`, Échap = quitter.
 
+## Taille de la fenêtre
+La fenêtre fait 1100x800 si l'écran le permet ; sur un écran plus petit (ou très zoomé, ex. portable à 150 %), elle est
+réduite automatiquement pour tenir entièrement dans la zone de travail et centrée. Le jeu s'affiche alors mis à l'échelle
+(seule la zone modifiée est recopiée), les clics restent justes.
+
 ## Options (rappelées en bas de la fenêtre)
 | Touche | Effet |
 |---|---|
@@ -21,7 +26,7 @@ Double-clic sur `421.exe` (62-72 Ko, aucune installation).
 | `L` | niveau du bot : facile → normal → difficile |
 | `H` | **aide** pendant le choix des dés : probabilité de 421 et de « mieux » pour les dés sélectionnés + conseil optimal |
 | `P` | pot de départ 7 / 11 / 15 / 21 jetons (à la prochaine partie) |
-| `F11` | **plein écran** : la fenêtre s'étend à l'écran, le jeu reste en 1:1 centré sur fond noir (aucun coût de mise à l'échelle). Échap en sort |
+| `F11` | **plein écran** : le jeu est agrandi pour remplir l'écran (proportions gardées, bandes noires sur les côtés si besoin). Échap en sort |
 
 Niveaux du bot : *facile* = stratégie normale avec 35 % de décisions au hasard ; *normal* = garde les as, un 2 et un 4 ;
 *difficile* = stratégie **optimale** (programmation dynamique sur les 56 mains possibles, utilité en jetons). En simulation :
@@ -75,4 +80,4 @@ Dans la console : Entrée pour lancer, chiffres des dés à relancer (ex. `13`),
 - Outils de test : `shot.py` (captures), `autoplay.py` (partie automatique), `bench.py` (mesures par mode),
   `imgdiff.py`, `termtest.py` (partie en terminal), `bottest.py` (décisions du bot asm = stratégie Python),
   `screencap.py` (capture de l'écran, plein écran), `nettest.py` (deux instances jouent en ligne et on vérifie qu'elles
-  restent identiques), `netshot.py` (captures des écrans multijoueur), `tools.py`.
+  restent identiques), `netshot.py` (captures des écrans multijoueur), `fstest.py` (plein écran mis à l'échelle + clics), `tools.py`.

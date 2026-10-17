@@ -1216,18 +1216,7 @@ WndProc:
     cmp dword ptr [rip+g_dirty], 0
     je .Lw_idle
     mov rcx, rbx
-    mov eax, dword ptr [rip+g_R]            # zone sale en coordonnées de la fenêtre (décalage du plein écran)
-    add eax, dword ptr [rip+g_ox]
-    mov dword ptr [rip+g_Roff], eax
-    mov eax, dword ptr [rip+g_R+4]
-    add eax, dword ptr [rip+g_oy]
-    mov dword ptr [rip+g_Roff+4], eax
-    mov eax, dword ptr [rip+g_R+8]
-    add eax, dword ptr [rip+g_ox]
-    mov dword ptr [rip+g_Roff+8], eax
-    mov eax, dword ptr [rip+g_R+12]
-    add eax, dword ptr [rip+g_oy]
-    mov dword ptr [rip+g_Roff+12], eax
+    call view_roff                          # zone sale en pixels de la fenêtre (échelle, décalage)
     lea rdx, [rip+g_Roff]
     xor r8d, r8d
     cmp dword ptr [rip+g_full], 0
@@ -1257,7 +1246,13 @@ WndProc:
     cmp dword ptr [rip+g_dirty], 0
     je 1f
     call render_frame
-1:  mov eax, dword ptr [rip+g_ps+20]     # zone à recopier, ramenée au tampon du jeu (plein écran : décalage)
+1:  cmp dword ptr [rip+g_sc_on], 0
+    je .Lw_p1x
+    mov rcx, r15
+    call view_stretch                       # affichage mis à l'échelle (petit écran ou plein écran)
+    jmp 2f
+.Lw_p1x:
+    mov eax, dword ptr [rip+g_ps+20]     # zone à recopier, ramenée au tampon du jeu (plein écran : décalage)
     sub eax, dword ptr [rip+g_ox]
     cmp eax, WW
     jle 3f
@@ -1431,11 +1426,10 @@ WndProc:
 .Lw_click:
     mov ecx, r14d
     and ecx, 0xFFFF
-    sub ecx, dword ptr [rip+g_ox]
     mov edx, r14d
     shr edx, 16
     and edx, 0xFFFF
-    sub edx, dword ptr [rip+g_oy]
+    call view_mouse                         # pixels de la fenêtre -> pixels du jeu
     call on_click
     jmp .Lw_kick
 
@@ -1504,10 +1498,19 @@ start:
     lea rdx, [rip+c_class]
     lea r8, [rip+c_title]
     mov r9d, 0x10CA0000                     # + WS_VISIBLE
-    mov dword ptr [rsp+32], 0x80000000      # CW_USEDEFAULT
-    mov dword ptr [rsp+40], 0x80000000
-    mov dword ptr [rsp+48], r10d
-    mov dword ptr [rsp+56], r11d
+    call calc_window_size                   # échelle pour que la fenêtre tienne dans l'écran, centrée
+    xor ecx, ecx
+    lea rdx, [rip+c_class]
+    lea r8, [rip+c_title]
+    mov r9d, 0x10CA0000
+    mov eax, dword ptr [rip+g_cwx]
+    mov dword ptr [rsp+32], eax
+    mov eax, dword ptr [rip+g_cwy]
+    mov dword ptr [rsp+40], eax
+    mov eax, dword ptr [rip+g_cww]
+    mov dword ptr [rsp+48], eax
+    mov eax, dword ptr [rip+g_cwh]
+    mov dword ptr [rsp+56], eax
     mov qword ptr [rsp+64], 0
     mov qword ptr [rsp+72], 0
     mov rax, qword ptr [rip+g_hinst]

@@ -97,6 +97,13 @@ gp_names:   .quad gpn_0, gpn_1, gpn_2, gpn_3, gpn_4, gpn_5, gpn_6, gpn_7, gpn_8
 
 .data
 .balign 8
+g_scale:    .double 1.0                     # échelle d'affichage (fenêtre ou plein écran) par rapport au tampon 1100x800
+g_iscale:   .double 1.0
+g_wscale:   .double 1.0
+k_w100:     .double 100.0
+k_w1100:    .double 1100.0
+k_w800:     .double 800.0
+k_eps6:     .double 0.000001
 g_R:        .long WW, WH, 0, 0              # zone sale accumulée (l, t, r, b) : vide
 g_cR:       .long 0, 0, WW, WH              # zone composée à cette image
 g_mode:     .long 0
@@ -139,6 +146,21 @@ g_erase:    .skip 4
 g_fsmode:   .skip 4
 g_wrect:    .skip 16
 g_Roff:     .skip 16
+g_rect2:    .skip 16
+g_sc_on:    .skip 4
+g_wson:     .skip 4
+g_cwx:      .skip 4
+g_cwy:      .skip 4
+g_cww:      .skip 4
+g_cwh:      .skip 4
+pv_sl:      .skip 4
+pv_st:      .skip 4
+pv_sr:      .skip 4
+pv_sb:      .skip 4
+pv_dl:      .skip 4
+pv_dt:      .skip 4
+pv_dr:      .skip 4
+pv_db:      .skip 4
 g_toterm:   .skip 4
 g_cnt:      .skip 4
 g_frames:   .skip 4
@@ -2319,18 +2341,9 @@ toggle_fullscreen:
     mov dword ptr [rsp+40], r13d
     mov dword ptr [rsp+48], 0x60            # SWP_FRAMECHANGED | SWP_SHOWWINDOW
     call SetWindowPos
-    mov eax, r12d
-    sub eax, WW
-    sar eax, 1
-    jns 1f
-    xor eax, eax
-1:  mov dword ptr [rip+g_ox], eax
-    mov eax, r13d
-    sub eax, WH
-    sar eax, 1
-    jns 2f
-    xor eax, eax
-2:  mov dword ptr [rip+g_oy], eax
+    mov ecx, r12d
+    mov edx, r13d
+    call fs_view                            # le jeu remplit l'écran (proportions gardées)
     mov dword ptr [rip+g_fsmode], 1
     mov dword ptr [rip+g_erase], 1
     mov rcx, qword ptr [rip+g_hwnd]
@@ -2357,6 +2370,7 @@ toggle_fullscreen:
     call SetWindowPos
     mov dword ptr [rip+g_ox], 0
     mov dword ptr [rip+g_oy], 0
+    call fs_restore
     mov dword ptr [rip+g_fsmode], 0
     mov rcx, qword ptr [rip+g_hwnd]
     xor edx, edx
@@ -2365,4 +2379,312 @@ toggle_fullscreen:
 .Ltf_end:
     mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
+    LEAVE
+
+# ---------- affichage à l'échelle (écran plus petit que la fenêtre, ou plein écran qui remplit l'écran) ----------
+# Le jeu se dessine toujours dans le tampon 1100x800 ; seul le dernier recopiage vers la fenêtre est mis à l'échelle
+# (StretchBlt HALFTONE, seulement sur la zone modifiée) quand l'échelle n'est pas exactement 1.
+
+# calc_window_size : r10d, r11d = taille totale d'une fenêtre dont le client fait WWxWH.
+#   Choisit une échelle (25..100 %) pour que la fenêtre tienne dans la zone de travail de l'écran, la centre.
+calc_window_size:
+    ENTER
+    mov r12d, r10d
+    sub r12d, WW                            # épaisseur des bordures
+    mov r13d, r11d
+    sub r13d, WH
+    mov ecx, 0x30                           # SPI_GETWORKAREA
+    xor edx, edx
+    lea r8, [rip+g_rect2]
+    xor r9d, r9d
+    call SystemParametersInfoA
+    mov r14d, dword ptr [rip+g_rect2+8]
+    sub r14d, dword ptr [rip+g_rect2]       # largeur de travail
+    mov r15d, dword ptr [rip+g_rect2+12]
+    sub r15d, dword ptr [rip+g_rect2+4]     # hauteur de travail
+    mov eax, r14d
+    sub eax, r12d
+    imul eax, eax, 100
+    cdq
+    mov ecx, WW
+    idiv ecx
+    mov ebx, eax                            # pourcentage permis par la largeur
+    mov eax, r15d
+    sub eax, r13d
+    imul eax, eax, 100
+    cdq
+    mov ecx, WH
+    idiv ecx                                # ... par la hauteur
+    cmp eax, ebx
+    jge 1f
+    mov ebx, eax
+1:  cmp ebx, 100
+    jle 2f
+    mov ebx, 100
+2:  cmp ebx, 25
+    jge 3f
+    mov ebx, 25
+3:  cvtsi2sd xmm0, ebx
+    divsd xmm0, qword ptr [rip+k_w100]
+    movsd qword ptr [rip+g_scale], xmm0
+    movsd xmm1, qword ptr [rip+k_one]
+    divsd xmm1, xmm0
+    movsd qword ptr [rip+g_iscale], xmm1
+    movsd qword ptr [rip+g_wscale], xmm0
+    xor eax, eax
+    cmp ebx, 100
+    setne al
+    mov dword ptr [rip+g_sc_on], eax
+    mov dword ptr [rip+g_wson], eax
+    imul eax, ebx, 11                       # client = (1100 p / 100) x (800 p / 100)
+    add eax, r12d
+    mov dword ptr [rip+g_cww], eax
+    imul ecx, ebx, 8
+    add ecx, r13d
+    mov dword ptr [rip+g_cwh], ecx
+    mov edx, r14d                           # centrage dans la zone de travail
+    sub edx, eax
+    sar edx, 1
+    jns 4f
+    xor edx, edx
+4:  add edx, dword ptr [rip+g_rect2]
+    mov dword ptr [rip+g_cwx], edx
+    mov edx, r15d
+    sub edx, ecx
+    sar edx, 1
+    jns 5f
+    xor edx, edx
+5:  add edx, dword ptr [rip+g_rect2+4]
+    mov dword ptr [rip+g_cwy], edx
+    LEAVE
+
+# fs_view : ecx = largeur, edx = hauteur de l'écran. Plein écran : le jeu remplit l'écran en gardant ses proportions
+fs_view:
+    movsd xmm0, qword ptr [rip+g_scale]
+    movsd qword ptr [rip+g_wscale], xmm0
+    mov eax, dword ptr [rip+g_sc_on]
+    mov dword ptr [rip+g_wson], eax
+    cvtsi2sd xmm0, ecx
+    divsd xmm0, qword ptr [rip+k_w1100]     # s = min(largeur / 1100, hauteur / 800)
+    cvtsi2sd xmm1, edx
+    divsd xmm1, qword ptr [rip+k_w800]
+    minsd xmm0, xmm1
+    movsd qword ptr [rip+g_scale], xmm0
+    movsd xmm1, qword ptr [rip+k_one]
+    divsd xmm1, xmm0
+    movsd qword ptr [rip+g_iscale], xmm1
+    movsd xmm1, qword ptr [rip+k_one]
+    subsd xmm1, xmm0
+    andpd xmm1, xmmword ptr [rip+k_absmask]
+    xor eax, eax
+    comisd xmm1, qword ptr [rip+k_eps6]
+    seta al
+    mov dword ptr [rip+g_sc_on], eax
+    movsd xmm1, qword ptr [rip+k_w1100]
+    mulsd xmm1, xmm0
+    cvttsd2si eax, xmm1                     # largeur affichée
+    mov r8d, ecx
+    sub r8d, eax
+    sar r8d, 1
+    jns 1f
+    xor r8d, r8d
+1:  mov dword ptr [rip+g_ox], r8d
+    movsd xmm1, qword ptr [rip+k_w800]
+    mulsd xmm1, xmm0
+    cvttsd2si eax, xmm1                     # hauteur affichée
+    mov r8d, edx
+    sub r8d, eax
+    sar r8d, 1
+    jns 2f
+    xor r8d, r8d
+2:  mov dword ptr [rip+g_oy], r8d
+    ret
+
+# fs_restore : retour à la fenêtre : on retrouve l'échelle d'avant
+fs_restore:
+    movsd xmm0, qword ptr [rip+g_wscale]
+    movsd qword ptr [rip+g_scale], xmm0
+    movsd xmm1, qword ptr [rip+k_one]
+    divsd xmm1, xmm0
+    movsd qword ptr [rip+g_iscale], xmm1
+    mov eax, dword ptr [rip+g_wson]
+    mov dword ptr [rip+g_sc_on], eax
+    ret
+
+# view_mouse : ecx = x, edx = y (pixels de la fenêtre) -> ecx, edx en pixels du tampon du jeu
+view_mouse:
+    cmp dword ptr [rip+g_sc_on], 0
+    jne 1f
+    sub ecx, dword ptr [rip+g_ox]
+    sub edx, dword ptr [rip+g_oy]
+    ret
+1:  cvtsi2sd xmm0, ecx
+    cvtsi2sd xmm2, dword ptr [rip+g_ox]
+    subsd xmm0, xmm2
+    mulsd xmm0, qword ptr [rip+g_iscale]
+    cvttsd2si ecx, xmm0
+    cvtsi2sd xmm1, edx
+    cvtsi2sd xmm2, dword ptr [rip+g_oy]
+    subsd xmm1, xmm2
+    mulsd xmm1, qword ptr [rip+g_iscale]
+    cvttsd2si edx, xmm1
+    ret
+
+# view_roff : g_Roff = zone sale (tampon) convertie en pixels de la fenêtre, avec une marge
+view_roff:
+    cmp dword ptr [rip+g_sc_on], 0
+    jne .Lvr_sc
+    mov eax, dword ptr [rip+g_R]
+    add eax, dword ptr [rip+g_ox]
+    mov dword ptr [rip+g_Roff], eax
+    mov eax, dword ptr [rip+g_R+4]
+    add eax, dword ptr [rip+g_oy]
+    mov dword ptr [rip+g_Roff+4], eax
+    mov eax, dword ptr [rip+g_R+8]
+    add eax, dword ptr [rip+g_ox]
+    mov dword ptr [rip+g_Roff+8], eax
+    mov eax, dword ptr [rip+g_R+12]
+    add eax, dword ptr [rip+g_oy]
+    mov dword ptr [rip+g_Roff+12], eax
+    ret
+.Lvr_sc:
+    cvtsi2sd xmm0, dword ptr [rip+g_R]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvttsd2si eax, xmm0
+    add eax, dword ptr [rip+g_ox]
+    sub eax, 3
+    mov dword ptr [rip+g_Roff], eax
+    cvtsi2sd xmm0, dword ptr [rip+g_R+4]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvttsd2si eax, xmm0
+    add eax, dword ptr [rip+g_oy]
+    sub eax, 3
+    mov dword ptr [rip+g_Roff+4], eax
+    cvtsi2sd xmm0, dword ptr [rip+g_R+8]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvttsd2si eax, xmm0
+    add eax, dword ptr [rip+g_ox]
+    add eax, 4
+    mov dword ptr [rip+g_Roff+8], eax
+    cvtsi2sd xmm0, dword ptr [rip+g_R+12]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvttsd2si eax, xmm0
+    add eax, dword ptr [rip+g_oy]
+    add eax, 4
+    mov dword ptr [rip+g_Roff+12], eax
+    ret
+
+# view_paint_rect : g_ps.rcPaint -> pv_s* (zone du tampon, avec marge) et pv_d* (zone de la fenêtre). eax = 0 si vide
+view_paint_rect:
+    movsd xmm1, qword ptr [rip+g_iscale]
+    cvtsi2sd xmm0, dword ptr [rip+g_ps+12]
+    cvtsi2sd xmm2, dword ptr [rip+g_ox]
+    subsd xmm0, xmm2
+    mulsd xmm0, xmm1
+    cvttsd2si eax, xmm0
+    sub eax, 2
+    jge 1f
+    xor eax, eax
+1:  mov dword ptr [rip+pv_sl], eax
+    cvtsi2sd xmm0, dword ptr [rip+g_ps+16]
+    cvtsi2sd xmm2, dword ptr [rip+g_oy]
+    subsd xmm0, xmm2
+    mulsd xmm0, xmm1
+    cvttsd2si eax, xmm0
+    sub eax, 2
+    jge 2f
+    xor eax, eax
+2:  mov dword ptr [rip+pv_st], eax
+    cvtsi2sd xmm0, dword ptr [rip+g_ps+20]
+    cvtsi2sd xmm2, dword ptr [rip+g_ox]
+    subsd xmm0, xmm2
+    mulsd xmm0, xmm1
+    cvttsd2si eax, xmm0
+    add eax, 3
+    cmp eax, WW
+    jle 3f
+    mov eax, WW
+3:  mov dword ptr [rip+pv_sr], eax
+    cvtsi2sd xmm0, dword ptr [rip+g_ps+24]
+    cvtsi2sd xmm2, dword ptr [rip+g_oy]
+    subsd xmm0, xmm2
+    mulsd xmm0, xmm1
+    cvttsd2si eax, xmm0
+    add eax, 3
+    cmp eax, WH
+    jle 4f
+    mov eax, WH
+4:  mov dword ptr [rip+pv_sb], eax
+    mov eax, dword ptr [rip+pv_sr]
+    cmp eax, dword ptr [rip+pv_sl]
+    jle .Lvp_empty
+    mov eax, dword ptr [rip+pv_sb]
+    cmp eax, dword ptr [rip+pv_st]
+    jle .Lvp_empty
+    movsd xmm1, qword ptr [rip+g_scale]     # destination : arrondi cohérent des bords (pas de couture entre zones)
+    cvtsi2sd xmm0, dword ptr [rip+pv_sl]
+    mulsd xmm0, xmm1
+    cvtsd2si eax, xmm0
+    add eax, dword ptr [rip+g_ox]
+    mov dword ptr [rip+pv_dl], eax
+    cvtsi2sd xmm0, dword ptr [rip+pv_st]
+    mulsd xmm0, xmm1
+    cvtsd2si eax, xmm0
+    add eax, dword ptr [rip+g_oy]
+    mov dword ptr [rip+pv_dt], eax
+    cvtsi2sd xmm0, dword ptr [rip+pv_sr]
+    mulsd xmm0, xmm1
+    cvtsd2si eax, xmm0
+    add eax, dword ptr [rip+g_ox]
+    mov dword ptr [rip+pv_dr], eax
+    cvtsi2sd xmm0, dword ptr [rip+pv_sb]
+    mulsd xmm0, xmm1
+    cvtsd2si eax, xmm0
+    add eax, dword ptr [rip+g_oy]
+    mov dword ptr [rip+pv_db], eax
+    mov eax, 1
+    ret
+.Lvp_empty:
+    xor eax, eax
+    ret
+
+# view_stretch : rcx = hdc de la fenêtre. Recopie la zone à repeindre en la mettant à l'échelle
+view_stretch:
+    ENTER
+    mov r12, rcx
+    call view_paint_rect
+    test eax, eax
+    jz .Lvs_end
+    mov rcx, r12
+    mov edx, 4                              # HALFTONE
+    call SetStretchBltMode
+    mov rcx, r12
+    xor edx, edx
+    xor r8d, r8d
+    xor r9d, r9d
+    mov qword ptr [rsp+32], 0
+    call SetBrushOrgEx
+    mov rcx, r12
+    mov edx, dword ptr [rip+pv_dl]
+    mov r8d, dword ptr [rip+pv_dt]
+    mov r9d, dword ptr [rip+pv_dr]
+    sub r9d, edx
+    mov eax, dword ptr [rip+pv_db]
+    sub eax, r8d
+    mov dword ptr [rsp+32], eax
+    mov rax, qword ptr [rip+g_hdcSmall]
+    mov qword ptr [rsp+40], rax
+    mov eax, dword ptr [rip+pv_sl]
+    mov dword ptr [rsp+48], eax
+    mov eax, dword ptr [rip+pv_st]
+    mov dword ptr [rsp+56], eax
+    mov eax, dword ptr [rip+pv_sr]
+    sub eax, dword ptr [rip+pv_sl]
+    mov dword ptr [rsp+64], eax
+    mov eax, dword ptr [rip+pv_sb]
+    sub eax, dword ptr [rip+pv_st]
+    mov dword ptr [rsp+72], eax
+    mov dword ptr [rsp+80], 0x00CC0020
+    call StretchBlt
+.Lvs_end:
     LEAVE
