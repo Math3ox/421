@@ -92,8 +92,12 @@ gpn_5:     .asciz "GdipSetSolidFillColor"
 gpn_6:     .asciz "GdipFillPolygon"
 gpn_7:     .asciz "GdipFlush"
 gpn_8:     .asciz "GdipSetClipRectI"
+gpn_9:     .asciz "GdipCreateBitmapFromScan0"
+gpn_10:    .asciz "GdipSetInterpolationMode"
+gpn_11:    .asciz "GdipDrawImageRectRectI"
+gpn_12:    .asciz "GdipDeleteGraphics"
 .balign 8
-gp_names:   .quad gpn_0, gpn_1, gpn_2, gpn_3, gpn_4, gpn_5, gpn_6, gpn_7, gpn_8
+gp_names:   .quad gpn_0, gpn_1, gpn_2, gpn_3, gpn_4, gpn_5, gpn_6, gpn_7, gpn_8, gpn_9, gpn_10, gpn_11, gpn_12
 
 .data
 .balign 8
@@ -104,6 +108,8 @@ k_w100:     .double 100.0
 k_w1100:    .double 1100.0
 k_w800:     .double 800.0
 k_eps6:     .double 0.000001
+k_i1100:    .long 1100
+k_i800:     .long 800
 g_R:        .long WW, WH, 0, 0              # zone sale accumulée (l, t, r, b) : vide
 g_cR:       .long 0, 0, WW, WH              # zone composée à cette image
 g_mode:     .long 0
@@ -198,7 +204,9 @@ ra_xe:      .skip 4
 ra_x0f:     .skip 4
 ra_y0f:     .skip 4
 gp_dll:     .skip 8
-gpf:        .skip 72
+gpf:        .skip 104
+g_gpbmp:    .skip 8
+g_gpw:      .skip 8
 g_gptoken:  .skip 8
 g_gpg:      .skip 8
 g_gpbrush:  .skip 8
@@ -606,7 +614,7 @@ gp_load:
     lea rcx, [rip+gpf]
     mov qword ptr [rcx+r13*8], rax
     inc r13d
-    cmp r13d, 9
+    cmp r13d, 13
     jb .Lgl_l
     mov qword ptr [rip+gp_dll], r12
     jmp .Lgl_end
@@ -2655,6 +2663,70 @@ view_stretch:
     call view_paint_rect
     test eax, eax
     jz .Lvs_end
+    call gp_ensure                          # GDI+ bicubique : bien plus net que StretchBlt (repli sur StretchBlt)
+    cmp qword ptr [rip+g_gpg], 0
+    je .Lvs_gdi
+    cmp qword ptr [rip+g_gpbmp], 0
+    jne 1f
+    mov ecx, WW
+    mov edx, WH
+    mov r8d, WW*4
+    mov r9d, 0x22009                        # PixelFormat32bppRGB
+    mov rax, qword ptr [rip+g_smallbits]
+    mov qword ptr [rsp+32], rax
+    lea rax, [rip+g_gpbmp]
+    mov qword ptr [rsp+40], rax
+    call qword ptr [rip+gpf+72]
+    test eax, eax
+    jz 1f
+    mov qword ptr [rip+g_gpbmp], 0
+    jmp .Lvs_gdi
+1:  mov rcx, r12
+    lea rdx, [rip+g_gpw]
+    call qword ptr [rip+gpf+8]              # GdipCreateFromHDC
+    test eax, eax
+    jnz .Lvs_gdi
+    mov rcx, qword ptr [rip+g_gpw]
+    mov edx, 7                              # HighQualityBicubic
+    call qword ptr [rip+gpf+80]
+    mov rcx, qword ptr [rip+g_gpw]
+    mov edx, 4                              # PixelOffsetModeHalf
+    call qword ptr [rip+gpf+24]
+    mov rcx, qword ptr [rip+g_gpw]          # on ne repeint que la zone sale, mais on dessine toute l'image sous ce clip :
+    mov edx, dword ptr [rip+pv_dl]          # les pixels sont identiques à ceux d'un affichage complet (pas de couture)
+    mov r8d, dword ptr [rip+pv_dt]
+    mov r9d, dword ptr [rip+pv_dr]
+    sub r9d, edx
+    mov eax, dword ptr [rip+pv_db]
+    sub eax, r8d
+    mov dword ptr [rsp+32], eax
+    mov dword ptr [rsp+40], 0               # CombineModeReplace
+    call qword ptr [rip+gpf+64]
+    cvtsi2sd xmm0, dword ptr [rip+k_i1100]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvtsd2si r13d, xmm0
+    cvtsi2sd xmm0, dword ptr [rip+k_i800]
+    mulsd xmm0, qword ptr [rip+g_scale]
+    cvtsd2si r14d, xmm0
+    mov rcx, qword ptr [rip+g_gpw]
+    mov rdx, qword ptr [rip+g_gpbmp]
+    mov r8d, dword ptr [rip+g_ox]
+    mov r9d, dword ptr [rip+g_oy]
+    mov dword ptr [rsp+32], r13d
+    mov dword ptr [rsp+40], r14d
+    mov dword ptr [rsp+48], 0
+    mov dword ptr [rsp+56], 0
+    mov dword ptr [rsp+64], WW
+    mov dword ptr [rsp+72], WH
+    mov dword ptr [rsp+80], 2               # UnitPixel
+    mov qword ptr [rsp+88], 0
+    mov qword ptr [rsp+96], 0
+    mov qword ptr [rsp+104], 0
+    call qword ptr [rip+gpf+88]
+    mov rcx, qword ptr [rip+g_gpw]
+    call qword ptr [rip+gpf+96]             # GdipDeleteGraphics
+    jmp .Lvs_end
+.Lvs_gdi:
     mov rcx, r12
     mov edx, 4                              # HALFTONE
     call SetStretchBltMode
