@@ -65,6 +65,7 @@ RGB C_BOTSIDE, 150, 40, 62
 RGB C_WHITE,   240, 240, 235
 RGB C_TXTGND,  190, 235, 205
 RGB C_HELDDISC, 176, 140, 36
+RGB C_HINT,    128, 138, 150
 
 .macro ENTER
     push rbp
@@ -244,6 +245,7 @@ cy_h:       .skip 8
 ch_a0:      .skip 8
 ch_b0:      .skip 8
 ch_a:       .skip 8
+ch_hs:      .skip 4
 g_dice:     .skip DSTRIDE*6
 g_side:     .skip 8
 g_fontB:    .skip 8
@@ -528,19 +530,24 @@ draw_chips:
     mov esi, edi
     test esi, esi
     jz .Lch_done
-    lea eax, [rsi+5]
+    mov ecx, 6                      # piles de 6 jetons, de 8 au-delà de 12 (pot de 21)
+    cmp esi, 12
+    jbe 8f
+    mov ecx, 8
+8:  mov dword ptr [rip+ch_hs], ecx
+    lea eax, [rsi+rcx-1]
     xor edx, edx
-    mov ecx, 6
     div ecx
     mov r12d, eax                   # nombre de piles
     xor r13d, r13d
 .Lch_stack:
-    imul eax, r13d, 6
+    mov eax, r13d
+    imul eax, dword ptr [rip+ch_hs]
     mov ecx, esi
     sub ecx, eax
-    cmp ecx, 6
+    cmp ecx, dword ptr [rip+ch_hs]
     jbe 1f
-    mov ecx, 6
+    mov ecx, dword ptr [rip+ch_hs]
 1:  mov r14d, ecx                   # hauteur de la pile
     cvtsi2sd xmm0, r13d
     cvtsi2sd xmm1, r12d
@@ -1163,7 +1170,19 @@ WndProc:
     call DefWindowProcA
     LEAVE
 .Lw_erase:
-    mov eax, 1
+    cmp dword ptr [rip+g_erase], 0
+    je 1f
+    mov dword ptr [rip+g_erase], 0
+    mov rcx, rbx                            # plein écran : fond noir, une fois
+    lea rdx, [rip+g_rect]
+    call GetClientRect
+    mov ecx, 4                              # BLACK_BRUSH
+    call GetStockObject
+    mov rcx, r13
+    lea rdx, [rip+g_rect]
+    mov r8, rax
+    call FillRect
+1:  mov eax, 1
     LEAVE
 .Lw_create:
     mov qword ptr [rip+g_hwnd], rbx
@@ -1191,7 +1210,19 @@ WndProc:
     cmp dword ptr [rip+g_dirty], 0
     je .Lw_idle
     mov rcx, rbx
-    lea rdx, [rip+g_R]
+    mov eax, dword ptr [rip+g_R]            # zone sale en coordonnées de la fenêtre (décalage du plein écran)
+    add eax, dword ptr [rip+g_ox]
+    mov dword ptr [rip+g_Roff], eax
+    mov eax, dword ptr [rip+g_R+4]
+    add eax, dword ptr [rip+g_oy]
+    mov dword ptr [rip+g_Roff+4], eax
+    mov eax, dword ptr [rip+g_R+8]
+    add eax, dword ptr [rip+g_ox]
+    mov dword ptr [rip+g_Roff+8], eax
+    mov eax, dword ptr [rip+g_R+12]
+    add eax, dword ptr [rip+g_oy]
+    mov dword ptr [rip+g_Roff+12], eax
+    lea rdx, [rip+g_Roff]
     xor r8d, r8d
     cmp dword ptr [rip+g_full], 0
     je 1f
@@ -1217,21 +1248,42 @@ WndProc:
     cmp dword ptr [rip+g_dirty], 0
     je 1f
     call render_frame
-1:  mov eax, dword ptr [rip+g_ps+20]
-    sub eax, dword ptr [rip+g_ps+12]
+1:  mov eax, dword ptr [rip+g_ps+20]     # zone à recopier, ramenée au tampon du jeu (plein écran : décalage)
+    sub eax, dword ptr [rip+g_ox]
+    cmp eax, WW
+    jle 3f
+    mov eax, WW
+3:  mov r9d, eax
+    mov eax, dword ptr [rip+g_ps+12]
+    sub eax, dword ptr [rip+g_ox]
+    jge 4f
+    xor eax, eax
+4:  mov r10d, eax
+    sub r9d, r10d
     jle 2f
-    mov r9d, eax                    # largeur de la zone à recopier
     mov eax, dword ptr [rip+g_ps+24]
-    sub eax, dword ptr [rip+g_ps+16]
+    sub eax, dword ptr [rip+g_oy]
+    cmp eax, WH
+    jle 5f
+    mov eax, WH
+5:  mov r11d, eax
+    mov eax, dword ptr [rip+g_ps+16]
+    sub eax, dword ptr [rip+g_oy]
+    jge 6f
+    xor eax, eax
+6:  mov esi, eax
+    sub r11d, esi
     jle 2f
-    mov dword ptr [rsp+32], eax
+    mov dword ptr [rsp+32], r11d
     mov rax, qword ptr [rip+g_hdcSmall]
     mov qword ptr [rsp+40], rax
-    mov edx, dword ptr [rip+g_ps+12]
-    mov r8d, dword ptr [rip+g_ps+16]
-    mov dword ptr [rsp+48], edx
-    mov dword ptr [rsp+56], r8d
+    mov dword ptr [rsp+48], r10d
+    mov dword ptr [rsp+56], esi
     mov dword ptr [rsp+64], 0x00CC0020
+    mov edx, r10d
+    add edx, dword ptr [rip+g_ox]
+    mov r8d, esi
+    add r8d, dword ptr [rip+g_oy]
     mov rcx, r15
     call BitBlt
 2:  mov rcx, rbx
@@ -1241,7 +1293,19 @@ WndProc:
     LEAVE
 .Lw_key:
     cmp r13d, 0x1B
+    jne .Lw_f0
+    cmp dword ptr [rip+g_fsmode], 0
     je .Lw_destroy
+    call toggle_fullscreen          # Échap quitte d'abord le plein écran
+    call opt_save
+    jmp .Lw_kick
+.Lw_f0:
+    cmp r13d, 0x7A                  # F11 : plein écran
+    jne .Lw_f1
+    call toggle_fullscreen
+    call opt_save
+    jmp .Lw_kick
+.Lw_f1:
     cmp r13d, 0x7B                  # F12 : capture
     jne 1f
     call save_bmp
@@ -1270,10 +1334,40 @@ WndProc:
     and ecx, 3
     mov dword ptr [rip+g_auto], 0
     call set_mode
+    call opt_save
     jmp .Lw_kick
-6:  cmp r13d, 0x30                  # 0 : qualité automatique
+6:
+.ifdef DEVTOOLS
+    cmp r13d, 0x54                  # T : export de test des décisions du bot (build de test)
+    jne .Lw_k5
+    call bot_dump
+    jmp .Lw_zero
+.endif
+.Lw_k5:
+    cmp r13d, 0x4A                  # J : 1 ou 2 joueurs
+    jne .Lw_k6
+    call toggle_twop
+    jmp .Lw_kick
+.Lw_k6:
+    cmp r13d, 0x4C                  # L : niveau du bot
+    jne .Lw_k7
+    call cycle_level
+    jmp .Lw_kick
+.Lw_k7:
+    cmp r13d, 0x48                  # H : aide
+    jne .Lw_k8
+    call help_advice
+    jmp .Lw_kick
+.Lw_k8:
+    cmp r13d, 0x50                  # P : pot de départ
+    jne .Lw_k9
+    call cycle_pot
+    jmp .Lw_kick
+.Lw_k9:
+    cmp r13d, 0x30                  # 0 : qualité automatique
     jne 7f
     mov dword ptr [rip+g_auto], 1
+    call opt_save
     jmp .Lw_kick
 7:  cmp r13d, 0x31                  # 1-4 : mode choisi
     jb 8f
@@ -1283,22 +1377,29 @@ WndProc:
     sub ecx, 0x31
     mov dword ptr [rip+g_auto], 0
     call set_mode
+    call opt_save
     jmp .Lw_kick
 8:  cmp r13d, 0x35                  # 5 : mode terminal
     jne 9f
     jmp .Lw_term
-9:  cmp r13d, 0x42                  # B : budgets minuscules (test de la bascule automatique)
+9:
+.ifdef DEVTOOLS
+    cmp r13d, 0x42                  # B : budgets minuscules (test de la bascule automatique, build de test)
     jne .Lw_zero
     mov qword ptr [rip+g_budget], 1
     mov qword ptr [rip+g_budget_eco], 1
     mov dword ptr [rip+g_auto], 1
     jmp .Lw_kick
+.endif
+    jmp .Lw_zero
 .Lw_click:
     mov ecx, r14d
     and ecx, 0xFFFF
+    sub ecx, dword ptr [rip+g_ox]
     mov edx, r14d
     shr edx, 16
     and edx, 0xFFFF
+    sub edx, dword ptr [rip+g_oy]
     call on_click
     jmp .Lw_kick
 
@@ -1309,6 +1410,7 @@ start:
     call GetModuleHandleA
     mov qword ptr [rip+g_hinst], rax
     call SetProcessDPIAware
+    call opt_load
     call GetCommandLineA                    # option " -t" : terminal directement, sans fenêtre
     mov rsi, rax
 .Lcl:
@@ -1377,8 +1479,12 @@ start:
     mov qword ptr [rsp+88], 0
     call CreateWindowExA
     test rax, rax
-    jnz .Lloop
+    jnz .Lwin_ok
     call term_main                          # fenêtre impossible : terminal
+.Lwin_ok:
+    cmp dword ptr [rip+g_optfs], 0
+    je .Lloop
+    call toggle_fullscreen                  # plein écran mémorisé
 .Lloop:
     lea rcx, [rip+g_msgbuf]
     xor edx, edx
@@ -1399,3 +1505,4 @@ start:
 .include "render.s"
 .include "game.s"
 .include "term.s"
+.include "ai.s"

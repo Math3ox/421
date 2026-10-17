@@ -54,6 +54,36 @@ names:  .quad n_421, n_111, n_11x, n_xxx, n_sui, n_nen, n_rien
 l_pot:       .asciz "POT "
 l_toi:       .asciz "TOI "
 l_bot:       .asciz "BOT "
+l_j1:        .asciz "J1 "
+l_j2:        .asciz "J2 "
+w_toi:       .asciz "Toi"
+w_bot:       .asciz "Bot"
+w_j1:        .asciz "Joueur 1"
+w_j2:        .asciz "Joueur 2"
+.balign 8
+who_names:   .quad w_toi, w_bot, w_j1, w_j2
+t_colon:     .asciz " : "
+t_first2:    .asciz " commence ! Lance les d\351s (3 lancers max)."
+t_turn2a:    .asciz " : lance les d\351s ("
+t_turn2b:    .asciz " lancer(s) max)."
+t_wm1:       .asciz " gagne la manche ! "
+t_wm2:       .asciz " encaisse "
+t_gw2:       .asciz " gagne la partie !"
+t_sel1:      .asciz "Ta s\351lection : "
+t_sel2:      .asciz " % de 421, "
+t_sel3:      .asciz " % de mieux. "
+t_adv:       .asciz "Conseil : "
+t_adv_keep:  .asciz "garde ta main."
+t_adv_re:    .asciz "relance les d\351s "
+t_lvl:       .asciz "Niveau du bot : "
+t_potm1:     .asciz "Pot de d\351part : "
+t_potm2:     .asciz " jetons (prochaine partie)."
+t_sep:       .asciz "   -   "
+t_dash:      .asciz " - "
+t_m1p:       .asciz "1 joueur"
+t_m2p:       .asciz "2 joueurs"
+t_bot2:      .asciz "Bot "
+t_hint:      .asciz "J : 1 ou 2 joueurs  -  L : niveau du bot  -  H : aide  -  P : pot  -  F11 : plein \351cran"
 t_manche:    .asciz "Manche "
 t_you_first: .asciz "Tu commences ! Lance les d\351s (3 lancers max)."
 t_bot_first: .asciz "Le bot commence..."
@@ -87,6 +117,10 @@ b_suivant:   .asciz "SUIVANT"
 b_rejouer:   .asciz "REJOUER"
 b_dots:      .asciz "..."
 
+.data
+.balign 4
+g_twop:     .long 0                 # 1 = deux joueurs sur le même PC
+g_potinit:  .long POT_INIT
 .bss
 .balign 8
 g_phase:    .skip 4
@@ -107,6 +141,10 @@ g_btokw:    .skip 4
 g_pcat:     .skip 4
 g_bcat:     .skip 4
 g_pt1:      .skip 528
+g_cur:      .skip 4
+g_targettok:.skip 4
+g_wins:     .skip 4
+g_losses:   .skip 4
 .balign 8
 g_wp:       .skip 8
 g_line1:    .skip 192
@@ -309,9 +347,27 @@ refresh_dice:
 
 # ---------- déroulement d'une partie ----------
 
+# msg_who : ecx = 0/1 -> ajoute le nom du joueur (Toi / Bot ou Joueur 1 / Joueur 2)
+msg_who:
+    mov eax, dword ptr [rip+g_twop]
+    lea eax, [rcx+rax*2]
+    lea rdx, [rip+who_names]
+    mov rsi, qword ptr [rdx+rax*8]
+    jmp msg_str
+
+# msg_hand : ecx = 0/1 -> ajoute "<nom> : "
+msg_hand:
+    sub rsp, 40
+    call msg_who
+    lea rsi, [rip+t_colon]
+    call msg_str
+    add rsp, 40
+    ret
+
 new_game:
     ENTER
-    mov dword ptr [rip+g_pot], POT_INIT
+    mov eax, dword ptr [rip+g_potinit]
+    mov dword ptr [rip+g_pot], eax
     mov dword ptr [rip+g_ptok], 0
     mov dword ptr [rip+g_btok], 0
     mov dword ptr [rip+g_starter], 0
@@ -328,14 +384,35 @@ begin_round:
     mov dword ptr [rip+g_pthrows], 0
     mov dword ptr [rip+g_bthrows], 0
     mov dword ptr [rip+g_target], 0
+    mov dword ptr [rip+g_targettok], 0
+    mov dword ptr [rip+g_cur], 0
     lea rdi, [rip+g_line2]
     call msg_start
     cmp dword ptr [rip+g_starter], 0
-    jne .Lbr_bot
+    jne .Lbr_second
     mov dword ptr [rip+g_phase], PH_PREROLL
     lea rdi, [rip+g_line1]
     call msg_start
+    cmp dword ptr [rip+g_twop], 0
+    jne 1f
     lea rsi, [rip+t_you_first]
+    call msg_str
+    jmp .Lbr_end
+1:  xor ecx, ecx
+    call msg_who
+    lea rsi, [rip+t_first2]
+    call msg_str
+    jmp .Lbr_end
+.Lbr_second:
+    cmp dword ptr [rip+g_twop], 0
+    je .Lbr_bot
+    mov dword ptr [rip+g_cur], 1                # le joueur 2 commence
+    mov dword ptr [rip+g_phase], PH_PREROLL
+    lea rdi, [rip+g_line1]
+    call msg_start
+    mov ecx, 1
+    call msg_who
+    lea rsi, [rip+t_first2]
     call msg_str
     jmp .Lbr_end
 .Lbr_bot:
@@ -353,7 +430,7 @@ begin_round:
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
-# player_press_main : LANCER / RELANCER / SUIVANT / REJOUER selon la phase
+# player_press_main : LANCER / RELANCER / SUIVANT / REJOUER selon la phase (joueur courant g_cur)
 player_press_main:
     ENTER
     mov eax, dword ptr [rip+g_phase]
@@ -367,31 +444,40 @@ player_press_main:
     je .Lpm_new
     jmp .Lpm_end
 .Lpm_pre:
-    mov dword ptr [rip+g_who], 0
-    mov dword ptr [rip+g_pthrows], 1
+    mov eax, dword ptr [rip+g_cur]
+    mov dword ptr [rip+g_who], eax
+    lea rdx, [rip+g_pthrows]
+    mov dword ptr [rdx+rax*4], 1
     mov dword ptr [rip+g_phase], PH_ROLLING
     lea rdi, [rip+g_line1]
     call msg_start
     lea rsi, [rip+t_rolling]
     call msg_str
-    mov ecx, 7
+    mov eax, dword ptr [rip+g_cur]
+    lea ecx, [rax+rax*2]
+    mov edx, 7
+    shl edx, cl
+    mov ecx, edx
     call start_throw
     jmp .Lpm_end
 .Lpm_choose:
-    xor ebx, ebx                    # masque des dés non gardés
+    mov eax, dword ptr [rip+g_cur]
+    lea r13d, [rax+rax*2]                       # premier dé du joueur
+    xor ebx, ebx                                # masque des dés à relancer
     xor r12d, r12d
 .Lpm_m:
-    imul eax, r12d, DSTRIDE
+    lea eax, [r13+r12]
+    imul eax, eax, DSTRIDE
     lea rsi, [rip+g_dice]
     cmp dword ptr [rsi+rax+D_HELD], 0
     je 1f
-    bts ebx, r12d                   # dé sélectionné = à relancer
+    bts ebx, r12d                               # dé sélectionné = à relancer
 1:  inc r12d
     cmp r12d, 3
     jb .Lpm_m
     test ebx, ebx
     jnz 2f
-    lea rdi, [rip+g_line1]          # rien de sélectionné : on le dit
+    lea rdi, [rip+g_line1]                      # rien de sélectionné : on le dit
     call msg_start
     lea rsi, [rip+t_nosel]
     call msg_str
@@ -399,13 +485,17 @@ player_press_main:
     mov dword ptr [rip+g_dirty], 1
     jmp .Lpm_end
 2:  call clear_held
-    inc dword ptr [rip+g_pthrows]
-    mov dword ptr [rip+g_who], 0
+    mov eax, dword ptr [rip+g_cur]
+    lea rdx, [rip+g_pthrows]
+    inc dword ptr [rdx+rax*4]
+    mov dword ptr [rip+g_who], eax
     mov dword ptr [rip+g_phase], PH_ROLLING
     lea rdi, [rip+g_line1]
     call msg_start
     lea rsi, [rip+t_rolling]
     call msg_str
+    mov ecx, r13d
+    shl ebx, cl
     mov ecx, ebx
     call start_throw
     jmp .Lpm_end
@@ -427,9 +517,15 @@ player_press_second:
 # on_roll_done : appelé quand les dés se sont posés
 on_roll_done:
     ENTER
-    cmp dword ptr [rip+g_who], 0
+    mov eax, dword ptr [rip+g_who]
+    cmp dword ptr [rip+g_twop], 0
+    jne .Lrd_human
+    test eax, eax
     jne .Lrd_bot
-    mov eax, dword ptr [rip+g_pthrows]
+.Lrd_human:
+    mov r12d, eax                               # joueur qui vient de lancer
+    lea rdx, [rip+g_pthrows]
+    mov eax, dword ptr [rdx+r12*4]
     cmp eax, dword ptr [rip+g_lim]
     jae .Lrd_fin
     mov dword ptr [rip+g_phase], PH_CHOOSE
@@ -437,7 +533,8 @@ on_roll_done:
     call msg_start
     lea rsi, [rip+t_ch1]
     call msg_str
-    mov eax, dword ptr [rip+g_pthrows]
+    lea rdx, [rip+g_pthrows]
+    mov eax, dword ptr [rdx+r12*4]
     call msg_num
     lea rsi, [rip+t_slash]
     call msg_str
@@ -445,12 +542,14 @@ on_roll_done:
     call msg_num
     lea rsi, [rip+t_ch2]
     call msg_str
-    xor ecx, ecx
+    lea ecx, [r12+r12*2]
     call score_hand
+    mov r13d, ecx                               # catégorie
     lea rdi, [rip+g_line2]
     call msg_start
-    lea rsi, [rip+t_toi]
-    call msg_str
+    mov ecx, r12d
+    call msg_hand
+    mov ecx, r13d
     call msg_name
     jmp .Lrd_end
 .Lrd_fin:
@@ -461,30 +560,40 @@ on_roll_done:
 .Lrd_end:
     LEAVE
 
-# finish_player_turn : ta main est figée
+# finish_player_turn : la main du joueur courant est figée
 finish_player_turn:
     ENTER
     call clear_held
     call refresh_dice
-    xor ecx, ecx
+    mov r12d, dword ptr [rip+g_cur]
+    lea ecx, [r12+r12*2]
     call score_hand
-    mov dword ptr [rip+g_prank], eax
-    mov dword ptr [rip+g_ptokw], edx
-    mov dword ptr [rip+g_pcat], ecx
+    lea rsi, [rip+g_prank]
+    mov dword ptr [rsi+r12*4], eax
+    lea rsi, [rip+g_ptokw]
+    mov dword ptr [rsi+r12*4], edx
+    lea rsi, [rip+g_pcat]
+    mov dword ptr [rsi+r12*4], ecx
+    mov r13d, eax                               # rang
+    mov r14d, edx                               # jetons
+    mov r15d, ecx                               # catégorie
     lea rdi, [rip+g_line2]
     call msg_start
-    lea rsi, [rip+t_toi]
-    call msg_str
-    mov ecx, dword ptr [rip+g_pcat]
+    mov ecx, r12d
+    call msg_hand
+    mov ecx, r15d
     call msg_name
     mov dword ptr [rip+g_phase], PH_BOT
-    cmp dword ptr [rip+g_starter], 0
-    jne .Lfp_second
-    mov eax, dword ptr [rip+g_prank]
-    mov dword ptr [rip+g_target], eax
-    mov eax, dword ptr [rip+g_pthrows]
+    cmp dword ptr [rip+g_starter], r12d
+    jne .Lfp_second                             # il jouait en second : on compare
+    mov dword ptr [rip+g_target], r13d          # il jouait en premier : cible pour l'autre
+    mov dword ptr [rip+g_targettok], r14d
+    lea rdx, [rip+g_pthrows]
+    mov eax, dword ptr [rdx+r12*4]
     mov dword ptr [rip+g_lim], eax
-    mov dword ptr [rip+g_bthrows], 0
+    cmp dword ptr [rip+g_twop], 0
+    jne .Lfp_p2
+    mov dword ptr [rip+g_bthrows], 0            # 1 joueur : le bot répond
     mov dword ptr [rip+g_botmask], 0x38
     lea rdi, [rip+g_line1]
     call msg_start
@@ -498,6 +607,24 @@ finish_player_turn:
     mov edx, ACT_BOT_ROLL
     call set_wake
     jmp .Lfp_end
+.Lfp_p2:
+    mov eax, r12d                               # 2 joueurs : au tour de l'autre
+    xor eax, 1
+    mov dword ptr [rip+g_cur], eax
+    lea rdx, [rip+g_pthrows]
+    mov dword ptr [rdx+rax*4], 0
+    mov dword ptr [rip+g_phase], PH_PREROLL
+    lea rdi, [rip+g_line1]
+    call msg_start
+    mov ecx, dword ptr [rip+g_cur]
+    call msg_who
+    lea rsi, [rip+t_turn2a]
+    call msg_str
+    mov eax, dword ptr [rip+g_lim]
+    call msg_num
+    lea rsi, [rip+t_turn2b]
+    call msg_str
+    jmp .Lfp_end
 .Lfp_second:
     mov ecx, 600
     mov edx, ACT_RESOLVE
@@ -507,7 +634,7 @@ finish_player_turn:
     mov dword ptr [rip+g_dirty], 1
     LEAVE
 
-# bot_after_roll : le bot regarde ses dés et décide de s'arrêter ou de relancer
+# bot_after_roll : le bot regarde ses dés et décide (selon son niveau) de s'arrêter ou de relancer
 bot_after_roll:
     ENTER
     inc dword ptr [rip+g_bthrows]
@@ -516,50 +643,19 @@ bot_after_roll:
     mov dword ptr [rip+g_brank], eax
     mov dword ptr [rip+g_btokw], edx
     mov dword ptr [rip+g_bcat], ecx
-    mov r12d, eax
     lea rdi, [rip+g_line2]
     call msg_start
-    lea rsi, [rip+t_bot]
-    call msg_str
+    mov ecx, 1
+    call msg_hand
     mov ecx, dword ptr [rip+g_bcat]
     call msg_name
     mov eax, dword ptr [rip+g_bthrows]
     cmp eax, dword ptr [rip+g_lim]
     jae .Lbo_stop
-    cmp r12d, 700
-    jae .Lbo_stop
-    mov edx, dword ptr [rip+g_target]
-    test edx, edx
-    jz 1f
-    cmp r12d, edx
-    ja .Lbo_stop
-1:  xor ebx, ebx                    # il garde les as, un 2 et un 4
-    xor r13d, r13d
-    xor r14d, r14d
-.Lbo_d:
-    imul eax, r14d, DSTRIDE
-    lea rsi, [rip+g_dice+3*DSTRIDE]
-    mov r8d, dword ptr [rsi+rax+D_VAL]
-    cmp r8d, 1
-    je .Lbo_keep
-    cmp r8d, 2
-    jne 2f
-    bts r13d, 0
-    jnc .Lbo_keep
-    jmp .Lbo_re
-2:  cmp r8d, 4
-    jne .Lbo_re
-    bts r13d, 1
-    jnc .Lbo_keep
-.Lbo_re:
-    bts ebx, r14d
-.Lbo_keep:
-    inc r14d
-    cmp r14d, 3
-    jb .Lbo_d
-    test ebx, ebx
+    call bot_choose
+    test eax, eax
     jz .Lbo_stop
-    mov eax, ebx
+    mov ebx, eax
     xor r13d, r13d
 .Lbo_pc:
     test eax, eax
@@ -620,6 +716,11 @@ do_action:
     jne .Lda_res
     mov eax, dword ptr [rip+g_bthrows]          # le bot commençait : à toi
     mov dword ptr [rip+g_lim], eax
+    mov eax, dword ptr [rip+g_brank]
+    mov dword ptr [rip+g_target], eax
+    mov eax, dword ptr [rip+g_btokw]
+    mov dword ptr [rip+g_targettok], eax
+    mov dword ptr [rip+g_cur], 0
     mov dword ptr [rip+g_pthrows], 0
     mov dword ptr [rip+g_phase], PH_PREROLL
     lea rdi, [rip+g_line1]
@@ -657,14 +758,14 @@ resolve_round:
     mov dword ptr [rip+g_bcat], ecx
     lea rdi, [rip+g_line2]
     call msg_start
-    lea rsi, [rip+t_toi]
-    call msg_str
+    xor ecx, ecx
+    call msg_hand
     mov ecx, dword ptr [rip+g_pcat]
     call msg_name
     lea rsi, [rip+t_gap]
     call msg_str
-    lea rsi, [rip+t_bot]
-    call msg_str
+    mov ecx, 1
+    call msg_hand
     mov ecx, dword ptr [rip+g_bcat]
     call msg_name
     lea rdi, [rip+g_line1]
@@ -672,40 +773,47 @@ resolve_round:
     mov eax, dword ptr [rip+g_prank]
     cmp eax, dword ptr [rip+g_brank]
     je .Lrr_tie
-    ja .Lrr_you
-    mov edi, dword ptr [rip+g_btokw]            # le bot gagne la manche
+    ja .Lrr_p1
+    mov edi, dword ptr [rip+g_btokw]            # le joueur 2 / le bot gagne la manche
     lea rsi, [rip+g_btok]
     lea rdx, [rip+g_ptok]
     call transfer
     mov r12d, eax
+    mov r13d, 1                                 # gagnant
     mov dword ptr [rip+g_starter], 0
-    lea rsi, [rip+t_losr]
-    call msg_str
-    mov eax, r12d
-    call msg_num
-    lea rsi, [rip+t_jet]
-    call msg_str
-    jmp .Lrr_check
-.Lrr_you:
-    mov edi, dword ptr [rip+g_ptokw]            # tu gagnes la manche
+    jmp .Lrr_msg
+.Lrr_p1:
+    mov edi, dword ptr [rip+g_ptokw]            # le joueur 1 gagne la manche
     lea rsi, [rip+g_ptok]
     lea rdx, [rip+g_btok]
     call transfer
     mov r12d, eax
+    xor r13d, r13d
     mov dword ptr [rip+g_starter], 1
-    lea rsi, [rip+t_winr]
+.Lrr_msg:
+    cmp dword ptr [rip+g_twop], 0
+    jne .Lrr_msg2
+    lea rsi, [rip+t_winr]                       # 1 joueur : phrases à la 2e personne
+    test r13d, r13d
+    jz 1f
+    lea rsi, [rip+t_losr]
+1:  call msg_str
+    jmp .Lrr_num
+.Lrr_msg2:
+    mov ecx, r13d
+    call msg_who
+    lea rsi, [rip+t_wm1]
     call msg_str
+    mov ecx, r13d
+    xor ecx, 1
+    call msg_who
+    lea rsi, [rip+t_wm2]
+    call msg_str
+.Lrr_num:
     mov eax, r12d
     call msg_num
     lea rsi, [rip+t_jet]
     call msg_str
-    jmp .Lrr_check
-.Lrr_tie:
-    lea rsi, [rip+t_tie]
-    call msg_str
-    mov dword ptr [rip+g_phase], PH_RESULT
-    jmp .Lrr_end
-.Lrr_check:
     mov dword ptr [rip+g_phase], PH_RESULT
     cmp dword ptr [rip+g_pot], 0
     jne .Lrr_end
@@ -714,19 +822,42 @@ resolve_round:
     cmp dword ptr [rip+g_btok], 0
     je .Lrr_lose
     jmp .Lrr_end
-.Lrr_win:
+.Lrr_tie:
+    lea rsi, [rip+t_tie]
+    call msg_str
+    mov dword ptr [rip+g_phase], PH_RESULT
+    jmp .Lrr_end
+.Lrr_win:                                       # le joueur 1 n'a plus de jeton
     lea rdi, [rip+g_line1]
     call msg_start
+    cmp dword ptr [rip+g_twop], 0
+    jne 2f
     lea rsi, [rip+t_victory]
     call msg_str
-    mov dword ptr [rip+g_phase], PH_OVER
+    inc dword ptr [rip+g_wins]
+    call opt_save
+    jmp 3f
+2:  xor ecx, ecx
+    call msg_who
+    lea rsi, [rip+t_gw2]
+    call msg_str
+3:  mov dword ptr [rip+g_phase], PH_OVER
     jmp .Lrr_end
-.Lrr_lose:
+.Lrr_lose:                                      # le joueur 2 / le bot n'a plus de jeton
     lea rdi, [rip+g_line1]
     call msg_start
+    cmp dword ptr [rip+g_twop], 0
+    jne 2f
     lea rsi, [rip+t_defeat]
     call msg_str
-    mov dword ptr [rip+g_phase], PH_OVER
+    inc dword ptr [rip+g_losses]
+    call opt_save
+    jmp 3f
+2:  mov ecx, 1
+    call msg_who
+    lea rsi, [rip+t_gw2]
+    call msg_str
+3:  mov dword ptr [rip+g_phase], PH_OVER
 .Lrr_end:
     mov dword ptr [rip+g_full], 1
     mov dword ptr [rip+g_dirty], 1
@@ -793,9 +924,12 @@ on_click:
     jmp .Loc_end
 2:  cmp dword ptr [rip+g_phase], PH_CHOOSE
     jne .Loc_end
+    mov eax, dword ptr [rip+g_cur]
+    lea r15d, [rax+rax*2]                       # premier dé du joueur courant
     xor r14d, r14d
 .Loc_die:
-    imul eax, r14d, DSTRIDE
+    lea eax, [r15+r14]
+    imul eax, eax, DSTRIDE
     lea rbx, [rip+g_dice]
     add rbx, rax
     lea rsi, [rbx+D_P]

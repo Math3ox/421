@@ -133,6 +133,12 @@ g_sumdt:    .skip 8
 g_budget:   .skip 8
 g_budget_eco: .skip 8
 g_gfxfail:  .skip 4
+g_ox:       .skip 4
+g_oy:       .skip 4
+g_erase:    .skip 4
+g_fsmode:   .skip 4
+g_wrect:    .skip 16
+g_Roff:     .skip 16
 g_toterm:   .skip 4
 g_cnt:      .skip 4
 g_frames:   .skip 4
@@ -1421,7 +1427,10 @@ draw_labels:
     lea rdi, [rip+g_lbl]
     call msg_start
     lea rsi, [rip+l_toi]
-    call msg_str
+    cmp dword ptr [rip+g_twop], 0
+    je 1f
+    lea rsi, [rip+l_j1]
+1:  call msg_str
     mov eax, dword ptr [rip+g_ptok]
     call msg_num
     lea rsi, [rip+g_lbl]
@@ -1431,7 +1440,10 @@ draw_labels:
     lea rdi, [rip+g_lbl]
     call msg_start
     lea rsi, [rip+l_bot]
-    call msg_str
+    cmp dword ptr [rip+g_twop], 0
+    je 2f
+    lea rsi, [rip+l_j2]
+2:  call msg_str
     mov eax, dword ptr [rip+g_btok]
     call msg_num
     lea rsi, [rip+g_lbl]
@@ -1462,7 +1474,30 @@ draw_hud:
     call msg_str
     mov eax, dword ptr [rip+g_round]
     call msg_num
-    mov ecx, WW-20
+    cmp dword ptr [rip+g_twop], 0
+    je 1f
+    lea rsi, [rip+t_sep]
+    call msg_str
+    lea rsi, [rip+t_m2p]
+    call msg_str
+    jmp 2f
+1:  lea rsi, [rip+t_sep]
+    call msg_str
+    lea rsi, [rip+t_bot2]
+    call msg_str
+    lea rdx, [rip+lv_names]
+    mov eax, dword ptr [rip+g_level]
+    mov rsi, qword ptr [rdx+rax*8]
+    call msg_str
+    lea rsi, [rip+t_sep]
+    call msg_str
+    mov eax, dword ptr [rip+g_wins]
+    call msg_num
+    lea rsi, [rip+t_dash]
+    call msg_str
+    mov eax, dword ptr [rip+g_losses]
+    call msg_num
+2:  mov ecx, WW-20
     mov edx, 17
     lea r8, [rip+g_lbl]
     mov r9d, 2                      # TA_RIGHT
@@ -1477,6 +1512,15 @@ draw_hud:
     mov ecx, 20
     mov edx, 98
     lea r8, [rip+g_line2]
+    xor r9d, r9d
+    call draw_flat
+    mov ecx, 3                              # rappel des touches, discret, en bas à gauche
+    call sel_fontk
+    mov ecx, C_HINT
+    call set_txt
+    mov ecx, 20
+    mov edx, WH-38
+    lea r8, [rip+t_hint]
     xor r9d, r9d
     call draw_flat
     LEAVE
@@ -2236,11 +2280,92 @@ init_gfx:
     div rcx
     cmp qword ptr [rip+g_tbg], rax
     ja .Lig_fail                            # même le décor est trop lent : terminal
-1:  mov ecx, r12d
+1:  cmp dword ptr [rip+g_optmode], 0         # mode choisi à la session précédente
+    je .Lig_mode
+    mov r12d, dword ptr [rip+g_optmode]
+    dec r12d
+    mov dword ptr [rip+g_auto], 0
+.Lig_mode:
+    mov ecx, r12d
     call set_mode
     call init_dice
     call new_game
     LEAVE
 .Lig_fail:
     mov dword ptr [rip+g_gfxfail], 1
+    LEAVE
+
+# toggle_fullscreen : F11. Bordure retirée, fenêtre étendue à l'écran, jeu centré en 1:1 sur fond noir
+#                     (aucune mise à l'échelle : même coût par image qu'en fenêtre)
+toggle_fullscreen:
+    ENTER
+    cmp dword ptr [rip+g_fsmode], 0
+    jne .Ltf_off
+    mov rcx, qword ptr [rip+g_hwnd]
+    lea rdx, [rip+g_wrect]
+    call GetWindowRect
+    mov rcx, qword ptr [rip+g_hwnd]
+    mov edx, -16                            # GWL_STYLE
+    mov r8d, 0x90000000                     # WS_POPUP | WS_VISIBLE
+    call SetWindowLongA
+    xor ecx, ecx                            # SM_CXSCREEN
+    call GetSystemMetrics
+    mov r12d, eax
+    mov ecx, 1                              # SM_CYSCREEN
+    call GetSystemMetrics
+    mov r13d, eax
+    mov rcx, qword ptr [rip+g_hwnd]
+    xor edx, edx
+    xor r8d, r8d
+    xor r9d, r9d
+    mov dword ptr [rsp+32], r12d
+    mov dword ptr [rsp+40], r13d
+    mov dword ptr [rsp+48], 0x60            # SWP_FRAMECHANGED | SWP_SHOWWINDOW
+    call SetWindowPos
+    mov eax, r12d
+    sub eax, WW
+    sar eax, 1
+    jns 1f
+    xor eax, eax
+1:  mov dword ptr [rip+g_ox], eax
+    mov eax, r13d
+    sub eax, WH
+    sar eax, 1
+    jns 2f
+    xor eax, eax
+2:  mov dword ptr [rip+g_oy], eax
+    mov dword ptr [rip+g_fsmode], 1
+    mov dword ptr [rip+g_erase], 1
+    mov rcx, qword ptr [rip+g_hwnd]
+    xor edx, edx
+    mov r8d, 1                              # effacer en noir une seule fois
+    call InvalidateRect
+    jmp .Ltf_end
+.Ltf_off:
+    mov rcx, qword ptr [rip+g_hwnd]
+    mov edx, -16
+    mov r8d, 0x10CA0000                     # style fenêtre normal
+    call SetWindowLongA
+    mov rcx, qword ptr [rip+g_hwnd]
+    xor edx, edx
+    mov r8d, dword ptr [rip+g_wrect]
+    mov r9d, dword ptr [rip+g_wrect+4]
+    mov eax, dword ptr [rip+g_wrect+8]
+    sub eax, r8d
+    mov dword ptr [rsp+32], eax
+    mov eax, dword ptr [rip+g_wrect+12]
+    sub eax, r9d
+    mov dword ptr [rsp+40], eax
+    mov dword ptr [rsp+48], 0x60
+    call SetWindowPos
+    mov dword ptr [rip+g_ox], 0
+    mov dword ptr [rip+g_oy], 0
+    mov dword ptr [rip+g_fsmode], 0
+    mov rcx, qword ptr [rip+g_hwnd]
+    xor edx, edx
+    xor r8d, r8d
+    call InvalidateRect
+.Ltf_end:
+    mov dword ptr [rip+g_full], 1
+    mov dword ptr [rip+g_dirty], 1
     LEAVE

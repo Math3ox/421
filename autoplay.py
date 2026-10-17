@@ -16,6 +16,11 @@ for _ in range(50):
     time.sleep(0.1)
 
 
+for k in sys.argv[1:]:
+    user32.PostMessageW(hwnd, 0x100, int(k, 16), 0)
+    time.sleep(0.4)
+
+
 def click(x, y):
     user32.PostMessageW(hwnd, 0x201, 1, (y << 16) | x)
 
