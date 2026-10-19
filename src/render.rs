@@ -66,7 +66,7 @@ impl Fonts {
             "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
             "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        ]);
+        ], "sans-serif:bold");
         let semi = FontFile::load(&[
             "C:\\Windows\\Fonts\\seguisb.ttf",
             "C:\\Windows\\Fonts\\segoeui.ttf",
@@ -74,7 +74,7 @@ impl Fonts {
             "/usr/share/fonts/TTF/DejaVuSans.ttf",
             "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
             "/System/Library/Fonts/Supplemental/Arial.ttf",
-        ]);
+        ], "sans-serif:semibold");
         Fonts { bold, semi }
     }
 }
