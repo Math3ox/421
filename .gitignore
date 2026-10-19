@@ -1,8 +1,8 @@
+/target/
 421.exe
-421_shot.bmp
+421_shot.png
 *.png
+*.zip
 __pycache__/
-421_dev.exe
 421.cfg
 421_bot.bin
-*.wav

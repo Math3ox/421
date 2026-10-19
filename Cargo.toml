@@ -1,0 +1,19 @@
+[package]
+name = "jeu421"
+version = "2.0.0"
+edition = "2021"
+description = "Jeu du 421 en 3D isometrique (bot, 2 joueurs, duel en ligne)"
+
+[[bin]]
+name = "421"
+path = "src/main.rs"
+
+[dependencies]
+macroquad = { version = "0.4", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

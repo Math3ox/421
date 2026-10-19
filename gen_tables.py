@@ -1,6 +1,6 @@
-"""Génère aitab.s : tables du bot « difficile » (stratégie optimale par programmation dynamique, utilité en jetons).
-Les 56 mains triées (a <= b <= c) servent d'états. Usage : python gen_tables.py   (écrit aitab.s à côté du script)
-Le module expose aussi policy_* pour comparer avec l'assembleur (voir bottest.py)."""
+"""Stratégie de référence du bot « difficile » (programmation dynamique, utilité en jetons), en Python.
+Les 56 mains triées (a <= b <= c) servent d'états. Le jeu (src/ai.rs) fait le même calcul ;
+bottest.py compare les décisions des deux (policy_starter / policy_follower)."""
 import itertools, os
 
 H = list(itertools.combinations_with_replacement(range(1, 7), 3))
@@ -106,28 +106,3 @@ def policy_follower(hand, throws, lim, target, target_tok):
         if e > best + 1e-6: best, bm = e, m
     return bm
 
-
-def emit():
-    out = ['# aitab.s — tables du bot « difficile » (générées par gen_tables.py, ne pas modifier à la main)',
-           '.section .rdata,"dr"', '.balign 4']
-    sidtab = [sid((a, b, c)) for a in range(1, 7) for b in range(1, 7) for c in range(1, 7)]
-    out.append('tbl_sid:')
-    for i in range(0, 216, 24):
-        out.append('    .byte ' + ', '.join(str(x) for x in sidtab[i:i + 24]))
-    out.append('tbl_h56:')
-    flat = [v for h in H for v in h]
-    for i in range(0, len(flat), 24):
-        out.append('    .byte ' + ', '.join(str(x) for x in flat[i:i + 24]))
-    out.append('.balign 4')
-    out.append('tbl_W:')
-    for name, arr in (('W1', W[1]), ('W2', W[2]), ('W3', W[3]), ('VS2', VS[2])):
-        out.append('    # ' + name)
-        for i in range(0, 56, 7):
-            out.append('    .float ' + ', '.join('%.6f' % x for x in arr[i:i + 7]))
-    return '\n'.join(out) + '\n'
-
-
-if __name__ == '__main__':
-    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aitab.s')
-    open(p, 'w', encoding='utf8', newline='\n').write(emit())
-    print('aitab.s ecrit :', os.path.getsize(p), 'octets')
