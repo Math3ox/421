@@ -4,10 +4,8 @@
 
 use crate::ai;
 use crate::game::{mv3, Die, Game, Phase, DIE_H, FACES, FELT};
-use macroquad::prelude::*;
+use crate::gfx::{rgb, Align, Color, Face, FontFile, Gfx, Xf, WH, WW};
 
-pub const WW: f32 = 1100.0;
-pub const WH: f32 = 800.0;
 const S: f64 = 64.0; // échelle monde -> pixels
 const CX: f64 = 550.0;
 const CY: f64 = 450.0;
@@ -23,9 +21,6 @@ const BOT_Z: f64 = -4.3;
 const PL_Z: f64 = 4.8;
 const POT_A: f64 = -4.6;
 
-const fn rgb(r: u8, g: u8, b: u8) -> Color {
-    Color::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
-}
 const C_BG: Color = rgb(18, 22, 29);
 const C_FLOORSH: Color = rgb(10, 13, 18);
 const C_WOOD: Color = rgb(128, 84, 44);
@@ -58,56 +53,28 @@ const PIPY: [f64; 9] = [-0.5, -0.5, -0.5, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5];
 
 pub const HINT: &str = "J : 1/2 joueurs  -  L : bot  -  H : aide  -  P : pot  -  N : en ligne  -  F11 : plein écran";
 
-/// Mise à l'échelle de l'espace virtuel 1100 x 800 vers la fenêtre.
-#[derive(Clone, Copy)]
-pub struct View {
-    pub sc: f32,
-    pub ox: f32,
-    pub oy: f32,
-}
-
-impl View {
-    pub fn fit() -> View {
-        let (w, h) = (screen_width(), screen_height());
-        let sc = (w / WW).min(h / WH);
-        View { sc, ox: ((w - WW * sc) / 2.0).floor(), oy: ((h - WH * sc) / 2.0).floor() }
-    }
-    fn pt(&self, x: f64, y: f64) -> Vec2 {
-        vec2(self.ox + x as f32 * self.sc, self.oy + y as f32 * self.sc)
-    }
-    /// Pixels de la fenêtre -> coordonnées du jeu.
-    pub fn to_game(&self, p: Vec2) -> (f64, f64) {
-        (((p.x - self.ox) / self.sc) as f64, ((p.y - self.oy) / self.sc) as f64)
-    }
-}
-
 pub struct Fonts {
-    bold: Option<Font>,
-    semi: Option<Font>,
-}
-
-fn load_font(paths: &[&str]) -> Option<Font> {
-    paths.iter().find_map(|p| std::fs::read(p).ok().and_then(|b| load_ttf_font_from_bytes(&b).ok()))
+    bold: FontFile,
+    semi: FontFile,
 }
 
 impl Fonts {
     pub fn load() -> Fonts {
-        let bold = load_font(&[
+        let bold = FontFile::load(&[
             "C:\\Windows\\Fonts\\segoeuib.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
             "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         ]);
-        let semi = load_font(&[
+        let semi = FontFile::load(&[
             "C:\\Windows\\Fonts\\seguisb.ttf",
             "C:\\Windows\\Fonts\\segoeui.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/TTF/DejaVuSans.ttf",
             "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
             "/System/Library/Fonts/Supplemental/Arial.ttf",
-        ])
-        .or_else(|| bold.clone());
+        ]);
         Fonts { bold, semi }
     }
 }
@@ -126,25 +93,22 @@ fn ground(a: f64, b: f64, z: f64) -> (f64, f64) {
 
 // ---------- primitives ----------
 
-struct Pen<'a> {
-    v: View,
+struct Pen<'a, 'b> {
+    g: &'a Gfx<'b>,
     fonts: &'a Fonts,
 }
 
-impl Pen<'_> {
+fn pts32(pts: &[(f64, f64)]) -> Vec<(f32, f32)> {
+    pts.iter().map(|&(x, y)| (x as f32, y as f32)).collect()
+}
+
+impl Pen<'_, '_> {
     fn fill(&self, pts: &[(f64, f64)], c: Color) {
-        let p: Vec<Vec2> = pts.iter().map(|&(x, y)| self.v.pt(x, y)).collect();
-        for i in 1..p.len().saturating_sub(1) {
-            draw_triangle(p[0], p[i], p[i + 1], c);
-        }
+        self.g.poly(&Xf::ID, &pts32(pts), Some(c), None);
     }
 
     fn outline(&self, pts: &[(f64, f64)], c: Color, w: f32) {
-        for i in 0..pts.len() {
-            let a = self.v.pt(pts[i].0, pts[i].1);
-            let b = self.v.pt(pts[(i + 1) % pts.len()].0, pts[(i + 1) % pts.len()].1);
-            draw_line(a.x, a.y, b.x, b.y, w * self.v.sc, c);
-        }
+        self.g.poly_w(&Xf::ID, &pts32(pts), None, Some(c), w);
     }
 
     fn ellipse_pts(cx: f64, cy: f64, rx: f64, ry: f64) -> Vec<(f64, f64)> {
@@ -176,23 +140,16 @@ impl Pen<'_> {
 
     /// Texte à plat. y = haut du texte ; align 0 gauche, 0.5 centré, 1 droite ; squash = écrasement vertical.
     fn text(&self, s: &str, x: f64, y: f64, size: f32, bold: bool, c: Color, align: f32, squash: f32) {
-        let font = if bold { self.fonts.bold.as_ref() } else { self.fonts.semi.as_ref() };
-        let px = (size * self.v.sc).round().max(1.0) as u16;
-        let dim = measure_text(s, font, px, 1.0);
-        let p = self.v.pt(x, y);
-        draw_text_ex(
-            s,
-            p.x - dim.width * align,
-            p.y + dim.offset_y * squash,
-            TextParams {
-                font,
-                font_size: px,
-                font_scale: squash,
-                font_scale_aspect: 1.0 / squash,
-                color: c,
-                ..Default::default()
-            },
-        );
+        let file = if bold { &self.fonts.bold } else { &self.fonts.semi };
+        let face: Face = file.face(size);
+        let al = if align < 0.25 {
+            Align::Left
+        } else if align < 0.75 {
+            Align::Center
+        } else {
+            Align::Right
+        };
+        self.g.text_sq(s, x as f32, y as f32, &face, c, al, squash);
     }
 
     /// Texte couché sur le plateau, centré en (a, b) à la hauteur z.
@@ -232,7 +189,7 @@ fn face_pt(d: &Die, fr: &[[f64; 3]; 3], kn: f64, ka: f64, kb: f64) -> [f64; 3] {
     std::array::from_fn(|i| d.p[i] + DIE_H * (kn * fr[0][i] + ka * fr[1][i] + kb * fr[2][i]))
 }
 
-fn draw_die_shadow(pen: &Pen, d: &Die) {
+fn draw_die_shadow(pen: &Pen<'_, '_>, d: &Die) {
     let fr = face_frame(d, 0);
     let mut pts = Vec::with_capacity(8);
     for k in 0..8 {
@@ -243,7 +200,7 @@ fn draw_die_shadow(pen: &Pen, d: &Die) {
     pen.fill(&hull(pts), Color::new(0.0, 0.0, 0.0, 100.0 / 255.0));
 }
 
-fn draw_die(pen: &Pen, d: &Die) {
+fn draw_die(pen: &Pen<'_, '_>, d: &Die) {
     for f in 0..6 {
         let fr = face_frame(d, f);
         let n = fr[0];
@@ -274,7 +231,7 @@ fn draw_die(pen: &Pen, d: &Die) {
     }
 }
 
-fn draw_dice(pen: &Pen, g: &Game) {
+fn draw_dice(pen: &Pen<'_, '_>, g: &Game) {
     for d in g.dice.iter().filter(|d| d.held) {
         let e = pen.ground_ellipse(d.ax, d.by, FELT, 1.4);
         pen.fill(&e, C_HELDDISC);
@@ -292,7 +249,7 @@ fn draw_dice(pen: &Pen, g: &Game) {
 
 // ---------- table, jetons, boutons ----------
 
-fn draw_table(pen: &Pen) {
+fn draw_table(pen: &Pen<'_, '_>) {
     pen.fill(&pen.ground_ellipse(0.0, 0.0, -0.95, 8.2), C_FLOORSH);
     pen.cylinder(0.0, 0.0, -0.95, 7.0, 1.05, C_WOOD, C_WOODSIDE);
     for k in 0..16u32 {
@@ -306,7 +263,7 @@ fn draw_table(pen: &Pen) {
 }
 
 /// Piles de 6 jetons (8 au-delà de 12, pot de 21).
-fn draw_chips(pen: &Pen, a0: f64, b: f64, n: u32, top: Color, side: Color) {
+fn draw_chips(pen: &Pen<'_, '_>, a0: f64, b: f64, n: u32, top: Color, side: Color) {
     if n == 0 {
         return;
     }
@@ -320,7 +277,7 @@ fn draw_chips(pen: &Pen, a0: f64, b: f64, n: u32, top: Color, side: Color) {
     }
 }
 
-fn draw_button(pen: &Pen, b: f64, label: &str, active: bool, blue: bool) {
+fn draw_button(pen: &Pen<'_, '_>, b: f64, label: &str, active: bool, blue: bool) {
     let ((top, side), txt) = match (active, blue) {
         (false, _) => (C_BTNX, C_BTNTXTX),
         (true, false) => (C_BTNG, C_BTNTXT),
@@ -330,7 +287,7 @@ fn draw_button(pen: &Pen, b: f64, label: &str, active: bool, blue: bool) {
     pen.ground_text(label, BTN_A, b - 0.18, BTN_TZ, 23.0, txt);
 }
 
-fn draw_buttons(pen: &Pen, g: &Game) {
+fn draw_buttons(pen: &Pen<'_, '_>, g: &Game) {
     let can = g.can_act();
     let (label, active) = match g.phase {
         _ if !can => ("...", false),
@@ -344,7 +301,7 @@ fn draw_buttons(pen: &Pen, g: &Game) {
     draw_button(pen, BTN_B[1], "VALIDER", g.phase == Phase::Choose && can, true);
 }
 
-fn draw_hud(pen: &Pen, g: &Game) {
+fn draw_hud(pen: &Pen<'_, '_>, g: &Game) {
     pen.ground_text(&format!("POT {}", g.pot), POT_A, 0.95, FELT, 40.0, C_TXTGND);
     pen.ground_text(&format!("{} {}", g.label(0), g.tok[0]), 0.0, 5.4, FELT, 40.0, C_TXTGND);
     pen.ground_text(&format!("{} {}", g.label(1), g.tok[1]), 0.0, -6.0, FELT, 40.0, C_TXTGND);
@@ -366,12 +323,16 @@ fn draw_hud(pen: &Pen, g: &Game) {
     pen.text(HINT, 20.0, WH as f64 - 38.0, 23.0, true, C_HINT, 0.0, 1.0);
 }
 
-/// Dessine toute l'image.
-pub fn draw(g: &Game, v: View, fonts: &Fonts) {
-    clear_background(BLACK);
-    let pen = Pen { v, fonts };
-    draw_rectangle(v.ox, v.oy, WW * v.sc, WH * v.sc, C_BG);
+/// Décor fixe (mis en cache) : fond et table.
+pub fn background(gfx: &Gfx, fonts: &Fonts) {
+    let pen = Pen { g: gfx, fonts };
+    gfx.rrect(&Xf::ID, 0.0, 0.0, 1100.0, WH, 0.0, Some(C_BG), None);
     draw_table(&pen);
+}
+
+/// Tout ce qui se dessine par-dessus le décor.
+pub fn draw(g: &Game, gfx: &Gfx, fonts: &Fonts) {
+    let pen = Pen { g: gfx, fonts };
     draw_hud(&pen, g);
     draw_chips(&pen, 0.0, BOT_Z, g.tok[1], C_BOTTOP, C_BOTSIDE);
     draw_chips(&pen, POT_A, 0.0, g.pot, C_POTTOP, C_POTSIDE);

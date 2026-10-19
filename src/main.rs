@@ -1,53 +1,32 @@
 //! 421 en 3D isométrique : contre un bot, à deux sur le même PC ou en duel en ligne.
-//! Fenêtre portable (macroquad : Windows, Linux, macOS) ; `421 -t` joue dans le terminal.
+//! Dessin 100 % processeur (aucune carte graphique), Windows / Linux / macOS ;
+//! `421 -t` joue dans le terminal.
 
 #![windows_subsystem = "windows"]
 
 mod ai;
 mod cfg;
 mod game;
+mod gfx;
 mod net;
 mod render;
+mod shell;
 mod term;
 
 use game::{Game, Mode};
-use macroquad::prelude::*;
+use gfx::Gfx;
 use net::{Menu, Net};
-use render::{Fonts, Hit, View, WH, WW};
+use render::{Fonts, Hit};
+use shell::Key;
+use std::hash::{Hash, Hasher};
 
 #[cfg(windows)]
 mod win {
-    use std::ffi::c_void;
-    #[repr(C)]
-    #[derive(Default)]
-    pub struct Rect {
-        pub l: i32,
-        pub t: i32,
-        pub r: i32,
-        pub b: i32,
-    }
-    #[link(name = "user32")]
-    extern "system" {
-        pub fn SetProcessDPIAware() -> i32;
-        pub fn SystemParametersInfoW(action: u32, p1: u32, p2: *mut c_void, p3: u32) -> i32;
-    }
     #[link(name = "kernel32")]
     extern "system" {
         pub fn AttachConsole(pid: u32) -> i32;
         pub fn AllocConsole() -> i32;
         pub fn SetConsoleOutputCP(cp: u32) -> i32;
-    }
-
-    /// Zone de travail de l'écran (sans la barre des tâches), en pixels réels.
-    pub fn work_area() -> (i32, i32) {
-        let mut r = Rect::default();
-        unsafe {
-            SetProcessDPIAware();
-            if SystemParametersInfoW(0x30, 0, &mut r as *mut Rect as *mut c_void, 0) == 0 {
-                return (1920, 1040);
-            }
-        }
-        (r.r - r.l, r.b - r.t)
     }
 
     /// Console pour le mode terminal (celle qui a lancé le jeu, sinon une nouvelle).
@@ -66,141 +45,167 @@ fn seed() -> u64 {
     (t.as_nanos() as u64) ^ 0x2545F4914F6CDD1D ^ (std::process::id() as u64) << 32
 }
 
-fn window_conf() -> Conf {
-    // 1100 x 800 si l'écran le permet, sinon réduite pour tenir dans la zone de travail
-    #[cfg(windows)]
-    let (aw, ah) = win::work_area();
-    #[cfg(not(windows))]
-    let (aw, ah) = (1100 + 16, 800 + 40);
-    let k = 1f32.min((aw - 16) as f32 / WW).min((ah - 40) as f32 / WH);
-    Conf {
-        window_title: "421 - jeu du bistro en 3D isométrique".into(),
-        window_width: (WW * k) as i32,
-        window_height: (WH * k) as i32,
-        window_resizable: true,
-        sample_count: 4,
-        ..Default::default()
-    }
-}
-
 fn main() {
+    let mut g = Game::new(seed());
+    let c = cfg::load(&mut g);
+    g.new_game();
     if std::env::args().any(|a| a == "-t") {
         #[cfg(windows)]
         win::console();
-        let mut g = Game::new(seed());
-        let c = cfg::load(&mut g);
-        g.new_game();
         term::run(g, |g| cfg::save(g, &c, false));
         return;
     }
-    macroquad::Window::from_config(window_conf(), run());
+    let net = Net::new(c.ip.clone());
+    let fullscreen = c.fullscreen;
+    let prev_duo = g.mode == Mode::Duo;
+    shell::run(App { fonts: Fonts::load(), g, c, net, fullscreen, quit: false, prev_duo, sig: 0 });
 }
 
-async fn run() {
-    let fonts = Fonts::load();
-    let mut g = Game::new(seed());
-    let mut c = cfg::load(&mut g);
-    g.new_game();
-    let mut net = Net::new(c.ip.clone());
-    let mut fullscreen = c.fullscreen;
-    if fullscreen {
-        set_fullscreen(true);
-    }
-    let mut prev_duo = g.mode == Mode::Duo;
-    loop {
-        let v = View::fit();
-        if !g.online() {
-            prev_duo = g.mode == Mode::Duo;
-        }
-        let mut save = false;
+struct App {
+    fonts: Fonts,
+    g: Game,
+    c: cfg::Cfg,
+    net: Net,
+    fullscreen: bool,
+    quit: bool,
+    /// mode local à mémoriser pendant une partie en ligne
+    prev_duo: bool,
+    /// empreinte de ce qui est affiché : on ne redessine que si elle change
+    sig: u64,
+}
 
-        // ---------- clavier ----------
-        let mut chars: Vec<char> = Vec::new();
-        while let Some(ch) = get_char_pressed() {
-            chars.push(ch);
+impl App {
+    fn save(&mut self) {
+        self.g.save_needed = false;
+        cfg::save(&self.g, &self.c, self.prev_duo);
+    }
+
+    fn signature(&self) -> u64 {
+        let g = &self.g;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&g.line1, &g.line2, g.phase, g.pot, g.tok, g.round, g.level, g.wins, g.losses, g.cur).hash(&mut h);
+        (format!("{:?}", g.mode), g.can_act()).hash(&mut h);
+        for d in &g.dice {
+            (d.val, d.held, d.p.map(|v| (v * 1000.0) as i64)).hash(&mut h);
         }
-        if net.menu == Menu::Ip {
-            if is_key_pressed(KeyCode::Escape) {
-                chars = vec!['\u{1b}'];
-            } else if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
-                chars = vec!['\r'];
-            } else if is_key_pressed(KeyCode::Backspace) {
-                chars = vec!['\u{8}'];
-            }
-            for ch in chars {
-                if net.ip_char(&mut g, ch) {
-                    c.ip = net.ip.clone();
-                    save = true;
+        h.finish()
+    }
+}
+
+impl shell::Game for App {
+    fn title(&self) -> String {
+        "421 - jeu du bistro en 3D isométrique".into()
+    }
+
+    fn shot_name(&self) -> &str {
+        "421_shot.png"
+    }
+
+    fn background(&mut self, gfx: &Gfx) {
+        render::background(gfx, &self.fonts);
+    }
+
+    fn draw(&mut self, gfx: &Gfx) {
+        render::draw(&self.g, gfx, &self.fonts);
+    }
+
+    fn tick(&mut self, dt: f64) -> bool {
+        if !self.g.online() {
+            self.prev_duo = self.g.mode == Mode::Duo;
+        }
+        self.g.tick(dt);
+        self.net.poll(&mut self.g);
+        if self.g.save_needed {
+            self.save();
+        }
+        let sig = self.signature();
+        let changed = sig != self.sig;
+        self.sig = sig;
+        changed
+    }
+
+    fn animating(&self) -> bool {
+        self.g.rolling
+    }
+
+    fn key(&mut self, k: Key) {
+        let g = &mut self.g;
+        let net = &mut self.net;
+        match net.menu {
+            Menu::Ip => {
+                let ch = match k {
+                    Key::Esc => '\u{1b}',
+                    Key::Enter => '\r',
+                    Key::Back => '\u{8}',
+                    Key::Char(c) => c,
+                    _ => return,
+                };
+                if net.ip_char(g, ch) {
+                    self.c.ip = net.ip.clone();
+                    self.save();
                 }
             }
-        } else if net.menu == Menu::Choice {
-            if let Some(&ch) = chars.first() {
-                net.menu_key(&mut g, ch);
-            } else if is_key_pressed(KeyCode::Escape) {
-                net.menu_key(&mut g, '\u{1b}');
-            }
-        } else {
-            if is_key_pressed(KeyCode::Escape) {
-                if net.pending() {
-                    net.close(&mut g, "Multijoueur annulé.");
-                } else if fullscreen {
-                    fullscreen = false;
-                    set_fullscreen(false);
-                    c.fullscreen = false;
-                    save = true;
-                } else {
-                    break;
+            Menu::Choice => match k {
+                Key::Char(c) => net.menu_key(g, c),
+                Key::Esc => net.menu_key(g, '\u{1b}'),
+                _ => {}
+            },
+            Menu::None => match k {
+                Key::Esc => {
+                    if net.pending() {
+                        net.close(g, "Multijoueur annulé.");
+                    } else if self.fullscreen {
+                        self.fullscreen = false;
+                        self.c.fullscreen = false;
+                        self.save();
+                    } else {
+                        self.quit = true;
+                    }
                 }
-            }
-            if is_key_pressed(KeyCode::F11) {
-                fullscreen = !fullscreen;
-                set_fullscreen(fullscreen);
-                c.fullscreen = fullscreen;
-                save = true;
-            }
-            if is_key_pressed(KeyCode::Space) {
-                g.ui_main();
-            }
-            if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
-                g.ui_second();
-            }
-            for ch in chars {
-                match ch.to_ascii_uppercase() {
-                    'N' => net.open(&mut g),
+                Key::F11 => {
+                    self.fullscreen = !self.fullscreen;
+                    self.c.fullscreen = self.fullscreen;
+                    self.save();
+                }
+                Key::Space => g.ui_main(),
+                Key::Enter => g.ui_second(),
+                Key::Char(c) => match c.to_ascii_uppercase() {
+                    'N' => net.open(g),
                     'J' => g.toggle_duo(),
                     'L' => g.cycle_level(),
                     'H' => g.help(),
                     'P' => g.cycle_pot(),
                     _ => {}
-                }
-            }
+                },
+                _ => {}
+            },
         }
+        if self.g.save_needed {
+            self.save();
+        }
+    }
 
-        // ---------- souris ----------
-        if is_mouse_button_pressed(MouseButton::Left) && net.menu == Menu::None && g.accepts_input() {
-            let (x, y) = v.to_game(mouse_position().into());
-            match render::hit(&g, x, y) {
-                Hit::Main => g.ui_main(),
-                Hit::Second => g.ui_second(),
-                Hit::Die(i) => g.ui_toggle(i),
-                Hit::Nothing => {}
-            }
+    fn click(&mut self, x: f32, y: f32) {
+        if self.net.menu != Menu::None || !self.g.accepts_input() {
+            return;
         }
+        match render::hit(&self.g, x as f64, y as f64) {
+            Hit::Main => self.g.ui_main(),
+            Hit::Second => self.g.ui_second(),
+            Hit::Die(i) => self.g.ui_toggle(i),
+            Hit::Nothing => {}
+        }
+    }
 
-        // ---------- temps, réseau, image ----------
-        g.tick((get_frame_time() as f64 * 1000.0).min(100.0));
-        net.poll(&mut g);
-        if save || g.save_needed {
-            g.save_needed = false;
-            cfg::save(&g, &c, prev_duo);
-        }
-        render::draw(&g, v, &fonts);
-        if is_key_pressed(KeyCode::F12) {
-            // capture : image opaque (les ombres translucides laissent un alpha < 1 dans le tampon)
-            let mut img = get_screen_data();
-            img.bytes.chunks_mut(4).for_each(|p| p[3] = 255);
-            img.export_png("421_shot.png");
-        }
-        next_frame().await;
+    fn hover(&mut self, _x: f32, _y: f32) -> bool {
+        false
+    }
+
+    fn fullscreen(&self) -> bool {
+        self.fullscreen
+    }
+
+    fn quit(&self) -> bool {
+        self.quit
     }
 }

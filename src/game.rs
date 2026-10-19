@@ -23,7 +23,7 @@ pub const FACES: [[[f64; 3]; 3]; 6] = [
     [[0., 0., -1.], [1., 0., 0.], [0., -1., 0.]],
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Phase {
     PreRoll, // à toi de lancer
     Rolling, // les dés roulent

@@ -1,12 +1,15 @@
 # 421 en 3D isométrique (Rust, Windows / Linux / macOS)
 
 Jeu du 421 contre un bot, à deux sur le même PC ou en duel en ligne : table ronde verte, jetons, dés et boutons dessinés
-en projection isométrique (rotation 3D réelle des dés pendant le lancer). Écrit en Rust avec
-[macroquad](https://github.com/not-fl3/macroquad) (OpenGL, anticrénelage 4x) : un seul code pour Windows, Linux et macOS.
+en projection isométrique (rotation 3D réelle des dés pendant le lancer). Écrit en Rust.
+Le dessin est fait **entièrement par le processeur, sans carte graphique ni OpenGL** (tiny-skia pour les formes
+anticrénelées, ab_glyph pour le texte, winit + softbuffer pour la fenêtre : affichage par GDI sous Windows).
+Comme dans la version assembleur, le décor est calculé une fois puis gardé en cache, seul ce qui bouge est
+redessiné, et rien n'est recalculé quand rien ne bouge. Un seul code pour Windows, Linux et macOS. Environ 27 Mo de RAM.
 
 ## Lancer
-Double-clic sur `421.exe` (moins de 1 Mo, aucune installation, uniquement des DLL de Windows 10/11).
-Sous Linux : `./421` (pilote OpenGL et X11 ou Wayland/XWayland).
+Double-clic sur `421.exe` (environ 1 Mo, aucune installation, uniquement des DLL de Windows 10/11).
+Sous Linux : `./421` (X11 ou Wayland, aucun pilote graphique particulier).
 
 ## Jouer
 - **LANCER** : lance les trois dés (3 lancers maximum ; le 2e joueur ne peut pas lancer plus de fois que le 1er).
@@ -64,7 +67,9 @@ relancer (ex. `13`), `q` pour quitter.
   `screencap.py` capture l'écran entier, `tools.py crop` agrandit une zone d'une capture.
 
 ## Fichiers
-- `src/main.rs` : fenêtre, clavier, souris, plein écran, boucle principale.
+- `src/main.rs` : le jeu dans sa fenêtre (touches, clics, réglages), `-t`.
+- `src/shell.rs` : fenêtre et boucle (winit + softbuffer), décor en cache, images seulement quand quelque chose change.
+- `src/gfx.rs` : dessin processeur (formes anticrénelées, transformations, textes) ; commun avec la belote.
 - `src/game.rs` : règles et déroulement (1 joueur, 2 joueurs, en ligne), dés en 3D (orientation, trajectoire du lancer),
   file des actions en ligne. Sans graphisme : le même moteur sert à la fenêtre, au terminal et aux tests.
 - `src/ai.rs` : rang des mains, niveaux du bot, stratégie optimale, probabilités de l'aide.
